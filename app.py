@@ -1,29 +1,4 @@
-"""🧬 Universal Livestock Genomics Pipeline v23.5 (Bovin & Camelin)
-Corrections v23.5 :
-  - fine_mapping : ABF Wakefield 2009 (Genet Epidemiol 33:79)
-  - windowed_fst : implémentation réelle Hudson (Genetics 132:583)
-  - reynolds : D = -log(1 - FST) (Genetics 105:767)
-  - fst_pairwise_bootstrap : IC 95% par block bootstrap
-  - ne_historical : utilise la carte génétique (cM) si disponible
-  - detect_roh : tolérance heterozygous (het_tol)
-  - run_gblup : estimation h² par REML profile
-  - admixture_nmf : docstrings explicites (NMF ≠ ADMIXTURE)
-  - UI : labels honnêtes + IC FST affichés
-
-Références clés :
-  - Weir & Cockerham 1984, Evolution 38:1358 (FST)
-  - Hudson et al. 1992, Genetics 132:583 (FST)
-  - Reynolds et al. 1983, Genetics 105:767 (distance génétique)
-  - Wigginton et al. 2005, AJHG 76:887 (HWE exact)
-  - Tajima 1989, Genetics 123:585 (D de Tajima)
-  - Manichaikul et al. 2010, Bioinformatics 26:2867 (KING)
-  - Botstein et al. 1980, AJHG 32:314 (PIC)
-  - Lee & Seung 1999, Nature 401:788 (NMF - attention: ≠ ADMIXTURE)
-  - Randhawa et al. 2014, Front Genet 5:295 (CSS)
-  - Wakefield 2009, Genet Epidemiol 33:79 (ABF fine-mapping)
-  - VanRaden 2008, J Dairy Sci 91:4414 (GBLUP)
-  - Sved 1971, Theor Popul Biol 2:125 (LD-Ne)
-"""
+"""🧬 Universal Livestock Genomics Pipeline v23.5 (Bovin & Camelin)"""
 import gzip, io, os, warnings, zipfile, gc
 from collections import Counter
 from io import BytesIO
@@ -119,9 +94,6 @@ def cache_data(func=None, **kw):
     return _d if func is None else _d(func)
 
 def impute_mean(gt):
-    """Imputation par moyenne (ATTENTION: biaise la variance — sous-estime FST/Ho).
-    Pour publication, préférer Beagle 5.4 (Browning et al. 2018, AJHG 103:338)
-    ou SHAPEIT5 (Hofmeister et al. 2023, Nat Genet 55:1514)."""
     g=gt.astype(np.float32,copy=True); cm=np.nanmean(g,axis=0); cm=np.where(np.isnan(cm),0.0,cm); nm=np.isnan(g)
     if nm.any(): g[nm]=np.take(cm, np.where(nm)[1])
     return g
@@ -316,7 +288,6 @@ def maf(g): p=np.nanmean(g,axis=0)/2.0; return np.minimum(p,1.0-p)
 def het(g): return np.nanmean(g==1, axis=1)
 
 def hwe_exact(nh, n0, n2):
-    """Test exact HWE (Wigginton et al. 2005, AJHG 76:887)."""
     n=nh+n0+n2
     if n==0 or (nh==0 and (n0==0 or n2==0)): return 1.0
     rare=2*min(n0,n2)+nh; mid=(rare*(2*n-rare))//(2*n)
@@ -368,11 +339,10 @@ def apply_qc(gt, ind_df, snp_df, params, autosomes, keep_autosomes=True, rem_out
     return gt,ind_df,snp_df,gt_pre,ind_pre,snp_pre,{"n_ind_init":int(n0),"n_snp_init":int(m0),"n_ind_final":int(gt.shape[0]),"n_snp_final":int(gt.shape[1]),"excluded_ind":int(n0-gt.shape[0]),"excluded_snp":int(m0-gt.shape[1]),"trace":tr}
 
 # ============================================================
-# ALGORITHMES DE GÉNÉTIQUE DES POPULATIONS
+# ALGORITHMES
 # ============================================================
 @cache_data
 def fst_snp_wc(gt, labels):
-    """FST par SNP — Weir & Cockerham 1984, Evolution 38:1358."""
     pops = np.unique(labels); r = len(pops); n_snp = gt.shape[1]; fst = np.full(n_snp, np.nan)
     for j in range(n_snp):
         n_i = np.zeros(r); p_i = np.zeros(r); h_i = np.zeros(r)
@@ -394,20 +364,17 @@ def fst_snp_wc(gt, labels):
 
 @cache_data
 def pca_analysis(gt, nc=10):
-    """PCA — Patterson et al. 2006, PLoS Genet 2:e190."""
     X=impute_mean(gt); X=X-X.mean(0); n=min(nc,X.shape[0]-1,X.shape[1]); p=PCA(n_components=n)
     return p.fit_transform(X), p.explained_variance_ratio_*100.0
 
 @cache_data
 def mds_analysis(gt, nc=5):
-    """MDS sur distance de Manhattan (approximation)."""
     X=impute_mean(gt); n=X.shape[0]; D=np.zeros((n,n),dtype=np.float32)
     for i in range(n): D[i]=np.abs(X-X[i]).sum(1)/X.shape[1]
     return SklearnMDS(n_components=nc,dissimilarity="precomputed",random_state=42,n_init=1,max_iter=300,normalized_stress=False).fit_transform(D)
 
 @st.cache_data(show_spinner=False)
 def compute_diversity(_gt, _labels, hash_key):
-    """Indices de diversité — Nei 1973, PNAS 70:3321 ; Botstein 1980, AJHG 32:314."""
     pops = np.unique(_labels)
     results = []
     for p in pops:
@@ -433,23 +400,17 @@ def compute_diversity(_gt, _labels, hash_key):
 
 @cache_data
 def king_mat(gt):
-    """KING-robust — Manichaikul et al. 2010, Bioinformatics 26:2867."""
     h = np.nansum(gt == 1, axis=1).astype(np.float64); H = (gt == 1).astype(np.float32); BH = H @ H.T; d = h[:, None] + h[None, :]
     with np.errstate(divide="ignore", invalid="ignore"): K = (d - 2 * BH) / d
     K[~np.isfinite(K)] = 0.0; np.fill_diagonal(K, 0.5); return K
 
 @cache_data
 def admixture_nmf(gt, K=3, seed=42):
-    """Décomposition NMF — Lee & Seung 1999, Nature 401:788.
-    ⚠️ N'EST PAS ADMIXTURE (Alexander et al. 2009, Genome Res 19:1655).
-    Approche différente (factorisation matricielle vs modèle Hardy-Weinberg + EM).
-    Résultats corrélés mais non identiques."""
     m=NMF(n_components=K,init="nndsvda",random_state=seed,max_iter=500); W=m.fit_transform(np.clip(impute_mean(gt),0.0,2.0)); s=W.sum(1,keepdims=True); s[s==0]=1.0
     return W/s, m.components_
 
 @cache_data
 def choose_best_k(gt, k_min=2, k_max=8, seed=42):
-    """Courbe d'erreur RMSE NMF vs K."""
     X = np.clip(impute_mean(gt), 0.0, 2.0); rows = []
     for k in range(k_min, k_max + 1):
         m = NMF(n_components=k, init="nndsvda", random_state=seed, max_iter=400); W = m.fit_transform(X); H = m.components_
@@ -458,7 +419,6 @@ def choose_best_k(gt, k_min=2, k_max=8, seed=42):
 
 @cache_data
 def ld_pruning(gt, w=50, step=5, r2=0.2):
-    """LD pruning — PLINK-like (Purcell et al. 2007, AJHG 81:559)."""
     n=gt.shape[1]
     if n<3: return np.ones(n,dtype=bool)
     keep=np.ones(n,dtype=bool); X=impute_mean(gt); X=X-X.mean(0); i=0
@@ -473,7 +433,6 @@ def ld_pruning(gt, w=50, step=5, r2=0.2):
 
 @cache_data
 def ld_decay(gt, snp_df, max_kb=1000, max_snp=3000):
-    """Décroissance du LD par bins de distance."""
     n = gt.shape[1]
     if n < 10: return pd.DataFrame(columns=["dist_kb","r2","count"])
     df_snp = snp_df.copy(); df_snp["CHR"] = df_snp["CHR"].astype(str); df_snp["BP"] = df_snp["BP"].astype(float); df_snp["CHR_num"] = df_snp["CHR"].map(lambda x: _chk(x)[1])
@@ -497,10 +456,6 @@ def ld_decay(gt, snp_df, max_kb=1000, max_snp=3000):
 
 @cache_data
 def ne_historical(gt, snp_df, max_snp=2000):
-    """Ne historique via LD — Sved 1971, Theor Popul Biol 2:125.
-    Formule : Ne = 1 / (4 · c · r²_adj) où c = distance en Morgans.
-    Si CM disponible dans snp_df, utilise la carte génétique réelle.
-    Sinon : fallback 1 cM = 1 Mb (approximation documentée)."""
     bp = snp_df["BP"].astype(float).values
     ca = snp_df["CHR"].astype(str).values
     cm_arr = snp_df["CM"].astype(float).values if "CM" in snp_df.columns else None
@@ -522,10 +477,10 @@ def ne_historical(gt, snp_df, max_snp=2000):
             r2l.append(r*r)
             if has_cm:
                 d_cM = abs(cm_arr[j] - cm_arr[i])
-                dl.append(d_cM / 100.0)  # Morgans
+                dl.append(d_cM / 100.0)
                 cM_vals.append(d_cM)
             else:
-                dl.append(d_mb * 0.01)  # fallback 1 cM = 1 Mb
+                dl.append(d_mb * 0.01)
                 cM_vals.append(d_mb * 1.0)
     if not dl: return pd.DataFrame({"GenAgo":[],"Ne":[]})
     r2 = np.array(r2l); d = np.array(dl); cM_arr_v = np.array(cM_vals)
@@ -535,9 +490,7 @@ def ne_historical(gt, snp_df, max_snp=2000):
     m = np.isfinite(r2b)
     if m.sum() < 3: return pd.DataFrame({"GenAgo":[],"Ne":[]})
     r2_adj = np.clip(r2b - 1.0 / X.shape[0], 1e-6, None)
-    # Ne = 1 / (4 · c · r²_adj) avec c en Morgans
     ne = np.where(r2_adj[m] > 1e-4, 1.0 / (4 * bc[m] * r2_adj[m]), np.nan)
-    # GenAgo = cM / (2 · 0.01) → approximé
     gen_ago = bc_cM[m] / 2.0
     df = pd.DataFrame({"GenAgo": gen_ago, "Ne": ne}).dropna()
     df = df[df["Ne"] > 0].sort_values("GenAgo")
@@ -546,11 +499,6 @@ def ne_historical(gt, snp_df, max_snp=2000):
 
 @cache_data
 def detect_roh(gt, snp_json, min_snps=30, min_kb=500.0, het_tol=1):
-    """Détection ROH simplifiée.
-    ⚠️ N'est PAS équivalent à PLINK --homozyg (Purcell 2007) ni bcftools roh (Narasimhan 2016).
-    Version simplifiée : runs de génotypes homozygotes avec tolérance het_tol hétérozygotes.
-    Les FROH peuvent être surestimés de 10-30% vs méthodes HMM.
-    Pour publication : valider avec PLINK ou bcftools sur un échantillon."""
     snp=pd.read_json(io.StringIO(snp_json)); n=min(gt.shape[1],len(snp)); gt=gt[:,:n]; snp=snp.iloc[:n].reset_index(drop=True)
     ca=snp["CHR"].astype(str).values; bp=pd.to_numeric(snp["BP"], errors="coerce").fillna(0).astype(np.int64).values
     rohs=[]; fb=np.zeros(gt.shape[0]); tot=0.0
@@ -590,9 +538,6 @@ def detect_roh(gt, snp_json, min_snps=30, min_kb=500.0, het_tol=1):
 
 @cache_data
 def fst_pairwise(gt, labels, use_wc84=True):
-    """FST pairwise entre races.
-    use_wc84=True  : Weir & Cockerham 1984, Evolution 38:1358 (recommandé)
-    use_wc84=False : Hudson et al. 1992, Genetics 132:583 (Hudson's FST)"""
     labels = np.asarray(labels).astype(str)
     pops = sorted(np.unique(labels)); K = len(pops); M = np.full((K, K), np.nan); np.fill_diagonal(M, 0.0)
     masks = {p: (labels == p) for p in pops}
@@ -603,7 +548,6 @@ def fst_pairwise(gt, labels, use_wc84=True):
                 sub = gt[sub_mask]; sub_lab = labels[sub_mask]
                 v = fst_snp_wc(sub, sub_lab); M[i,j] = M[j,i] = float(np.nanmean(v))
             else:
-                # Hudson 1992
                 g1 = gt[masks[pops[i]]]; g2 = gt[masks[pops[j]]]
                 p1 = np.nanmean(g1, 0) / 2.0; p2 = np.nanmean(g2, 0) / 2.0
                 Hw = (p1 * (1 - p1) + p2 * (1 - p2)) / 2.0
@@ -616,8 +560,6 @@ def fst_pairwise(gt, labels, use_wc84=True):
 
 @cache_data
 def fst_pairwise_bootstrap(gt, labels, n_boot=100, block=50, seed=42, use_wc84=True):
-    """FST pairwise avec IC 95% par block bootstrap (Efron 1979, Ann Stat 7:1).
-    Bloc de block_snps SNPs pour préserver le LD local."""
     rng = np.random.default_rng(seed)
     n_snp = gt.shape[1]
     point_M, pops = fst_pairwise(gt, labels, use_wc84=use_wc84)
@@ -640,11 +582,9 @@ def fst_pairwise_bootstrap(gt, labels, n_boot=100, block=50, seed=42, use_wc84=T
 
 @cache_data
 def windowed_fst(gt, snp_df, labels, w=50, step=25, use_wc84=True):
-    """FST par fenêtres glissantes."""
     if use_wc84:
         fst = fst_snp_wc(gt, labels)
     else:
-        # Hudson 1992 per SNP (multi-pop average)
         labels_a = np.asarray(labels).astype(str)
         pops = sorted(np.unique(labels_a))
         fst = np.full(gt.shape[1], np.nan)
@@ -686,7 +626,6 @@ def detect_outliers(win_df, z_thr=3.0):
 
 @cache_data
 def tajimas_window(genos):
-    """D de Tajima — Tajima 1989, Genetics 123:585."""
     ni, ns = genos.shape
     if ns < 3 or ni < 4: return np.nan, 0
     S = 0; piv = []
@@ -723,7 +662,6 @@ def tajimas_scan(gt, snp_df, w=25, step=10):
 
 @cache_data
 def composite_score(gt, snp_df, labels):
-    """CSS — Randhawa et al. 2014, Front Genet 5:295."""
     fst = fst_snp_wc(gt, labels); hom = np.nanmean((gt == 0) | (gt == 2), axis=0)
     maf_v = np.nanmean(gt, axis=0) / 2.0; maf_v = np.minimum(maf_v, 1 - maf_v)
     df = snp_df.copy().reset_index(drop=True); n = min(len(df), len(fst), len(hom), len(maf_v))
@@ -736,8 +674,6 @@ def composite_score(gt, snp_df, labels):
 
 @cache_data
 def reynolds(gt, labels):
-    """Distance de Reynolds — Reynolds et al. 1983, Genetics 105:767.
-    D = -ln(1 - F_ST) où F_ST = Σ(p_i - p_j)² / [2·Σ(p_i(1-p_j) + p_j(1-p_i))]"""
     labels = np.asarray(labels).astype(str)
     pops = sorted(np.unique(labels)); K = len(pops)
     ph = {p: np.nanmean(gt[labels == p], 0) / 2.0 for p in pops}
@@ -754,7 +690,6 @@ def reynolds(gt, labels):
 
 @cache_data
 def upgma_bootstrap(gt, snp_df, labels, n_boot=100, seed=42):
-    """UPGMA avec support bootstrap (Felsenstein 1985, Evolution 39:783)."""
     from scipy.cluster.hierarchy import linkage, to_tree
     from scipy.spatial.distance import squareform
     labels = np.asarray(labels).astype(str); pops = sorted(np.unique(labels)); K = len(pops); n_snp = gt.shape[1]
@@ -804,7 +739,6 @@ def midpoint_info(D, labels):
 # GWAS & API
 # ============================================================
 def _logistic_irls(X, y, max_iter=25, tol=1e-6):
-    """IRLS pour régression logistique."""
     beta = np.zeros(X.shape[1])
     for _ in range(max_iter):
         eta = np.clip(X @ beta, -30, 30); mu = 1.0 / (1.0 + np.exp(-eta))
@@ -822,9 +756,6 @@ def _logistic_irls(X, y, max_iter=25, tol=1e-6):
 
 @cache_data
 def gwas_pairwise(gt, snp_df, labels, ra, rb, maf_min=0.05, method="allelic", covs=None):
-    """GWAS case-control entre 2 races.
-    method='allelic' : χ² (purcell 2007)
-    method='logistic' : régression logistique IRLS"""
     labels = np.asarray(labels).astype(str); mask = np.isin(labels, [ra, rb])
     if mask.sum() < 20: raise ValueError(f"<20 individus pour {ra} vs {rb}")
     gab = gt[mask]; y = (labels[mask] == ra).astype(int)
@@ -861,7 +792,6 @@ def gwas_pairwise(gt, snp_df, labels, ra, rb, maf_min=0.05, method="allelic", co
 
 @cache_data
 def gwas_pairwise_group(gt, snp_df, groups, ga, gb, maf_min=0.05, method="allelic", covs=None):
-    """GWAS case-control entre 2 groupes (agrégation de races)."""
     groups = np.asarray(groups).astype(str); mask = np.isin(groups, [ga, gb])
     if mask.sum() < 20: raise ValueError(f"<20 individus pour {ga} vs {gb}")
     gab = gt[mask]; y = (groups[mask] == ga).astype(int)
@@ -902,7 +832,6 @@ def get_pairs(labels):
     return r, [(r[i], r[j]) for i in range(len(r)) for j in range(i + 1, len(r))]
 
 def _vc_delta(Y, X0, K):
-    """Estimation du ratio de variance (EMMAX-like) — Kang et al. 2010, Nat Genet 42:348."""
     n = len(Y); d, U = np.linalg.eigh(K); d = np.maximum(d, 0)
     Yt = U.T @ Y; X0t = U.T @ X0
     def nll(dl):
@@ -918,7 +847,6 @@ def _vc_delta(Y, X0, K):
 
 @cache_data
 def run_gwas(gt, pheno, K, covs, maf_min=0.05, miss_max=0.05, use_lmm=True, is_bin=False):
-    """GWAS LMM — approche EMMAX-like (Kang et al. 2010, Nat Genet 42:348)."""
     valid = np.isfinite(pheno)
     if valid.sum() < 10: raise ValueError("<10 individus valides")
     if K is None or not isinstance(K, np.ndarray) or K.shape[0] != gt.shape[0]: K = np.eye(gt.shape[0])
@@ -963,7 +891,6 @@ def annotate_gwas(r, snp_df):
     return r[["SNP_idx", "SNP", "CHR", "BP", "CM", "MAF", "BETA", "SE", "T", "P"]]
 
 def lambda_gc(pvals):
-    """Genomic control — Devlin & Roeder 1999, Biometrics 55:997."""
     p = np.asarray(pvals); p = p[np.isfinite(p) & (p > 0) & (p <= 1)]
     if len(p) < 10: return np.nan
     return float(np.median(stats.chi2.isf(p, df=1)) / stats.chi2.ppf(0.5, df=1))
@@ -984,10 +911,6 @@ def postprocess_gwas(r, apply_gc=True):
     return r.sort_values("P").reset_index(drop=True)
 
 def fine_mapping(r, prior_var=0.04):
-    """Fine-mapping ABF/PIP — Wakefield 2009, Genet Epidemiol 33:79.
-    ABF = √(1 - W) × exp(BETA² × W / (2 × SE²))
-    où W = v / (SE² + v), v = variance a priori (défaut 0.04).
-    PIP = ABF / Σ(ABF)."""
     if r.empty: return r
     df = r.copy().sort_values("P")
     v = prior_var
@@ -997,7 +920,6 @@ def fine_mapping(r, prior_var=0.04):
     return df.sort_values("PIP", ascending=False)
 
 def _h2_reml(Y, G):
-    """Estimation h² par REML profile pour Y = 1μ + u + e (VanRaden 2008)."""
     n = len(Y)
     def nll(logit_h2):
         h2 = 1 / (1 + np.exp(-logit_h2))
@@ -1020,7 +942,6 @@ def _h2_reml(Y, G):
     except: return 0.3
 
 def run_gblup(gt, pheno, kf=5):
-    """GBLUP avec estimation h² REML — Henderson 1975, VanRaden 2008."""
     valid = np.isfinite(pheno)
     if valid.sum() < 20: raise ValueError("<20 phénotypes")
     kf = min(kf, len(pheno) - 1)
@@ -1041,11 +962,7 @@ def run_gblup(gt, pheno, kf=5):
     return pd.DataFrame({"IID": np.where(valid)[0], "Phenotype": Y, "GEBV": gebv}), {
         "h2": bh, "corr": corr, "r2": corr ** 2, "rmse": float(np.sqrt(np.mean((Y - yp) ** 2)))}
 
-# ============================================================
-# MÉTA-ANALYSE
-# ============================================================
 def combine_pvalues_fisher(res_race, res_group):
-    """Fisher's combined p-value."""
     if res_race is None or res_group is None: return None
     m = res_race[["SNP", "CHR", "BP", "P"]].rename(columns={"P": "P_race"}).merge(
         res_group[["SNP", "P"]].rename(columns={"P": "P_group"}), on="SNP", how="inner")
@@ -1059,7 +976,6 @@ def combine_pvalues_fisher(res_race, res_group):
     return m.sort_values("P_combined").reset_index(drop=True)
 
 def combine_stouffer(res_race, res_group, n_race, n_group):
-    """Stouffer's weighted z-score combination."""
     if res_race is None or res_group is None: return None
     m = res_race[["SNP", "CHR", "BP", "P"]].rename(columns={"P": "P_race"}).merge(
         res_group[["SNP", "P"]].rename(columns={"P": "P_group"}), on="SNP", how="inner")
@@ -1086,9 +1002,6 @@ def permutation_test_race(gt, snp_df, labels, ra, rb, n_perm=100, seed=42, max_s
     p_emp = (np.sum(np.array(perm_counts) >= n_obs) + 1) / (n_perm + 1)
     return original, float(p_emp), n_obs, perm_counts
 
-# ============================================================
-# VEP & API EXTERNES
-# ============================================================
 _SEVERITY = {"HIGH": 4, "MODERATE": 3, "LOW": 2, "MODIFIER": 1}
 
 def traduire_consequence_vep(c):
@@ -1105,7 +1018,6 @@ def traduire_consequence_vep(c):
     return "⚪ Intergénique"
 
 def run_vep_api(snp_list, species, batch=200):
-    """Ensembl VEP REST API — McLaren et al. 2016, Genome Biol 17:122."""
     if not snp_list: return pd.DataFrame()
     url = f"https://rest.ensembl.org/vep/{species}/region?regulatory=1"
     headers = {"Content-Type": "application/json", "Accept": "application/json"}; results = []
@@ -1170,7 +1082,6 @@ def fetch_uniprot_id(gene_name, taxon):
     return None
 
 def fetch_alphafold_pdb(uniprot_id):
-    """AlphaFold DB — Jumper et al. 2021, Nature 596:583."""
     url = f"https://alphafold.ebi.ac.uk/api/prediction/{uniprot_id}"
     try:
         r = requests.get(url, timeout=30)
@@ -1306,7 +1217,6 @@ def annotate_genes_cm(snp_target, snp_df_full, gff, window_cm=10, window_kb_fall
     return df
 
 def run_enrichment(gene_list, gene_sets=None, organism="Human", outdir=None):
-    """Enrichr — Kuleshov et al. 2016, Nucleic Acids Res 44:W90."""
     try:
         import gseapy as gp
         genes = list({str(g).strip() for g in gene_list if str(g).strip() and str(g) != "nan"})
@@ -1319,11 +1229,13 @@ def run_enrichment(gene_list, gene_sets=None, organism="Human", outdir=None):
                          "Overlap": "OVERLAP", "Genes": "GENES", "Combined Score": "SCORE"}.items():
             if old in df.columns: df = df.rename(columns={old: new})
         return df.sort_values("FDR").reset_index(drop=True)
+    except ImportError:
+        st.error("⚠️ Le module `gseapy` n'est pas installé sur ce serveur.")
+        return pd.DataFrame()
     except Exception as e:
         st.error(f"❌ Enrichr : {e}"); return pd.DataFrame()
 
 def query_string_network(genes, species, required_score=400):
-    """STRING DB — Szklarczyk et al. 2023, Nucleic Acids Res 51:D638."""
     if not genes or len(genes) < 2: return pd.DataFrame(), pd.DataFrame()
     ids = "%0d".join([str(g).strip() for g in genes if str(g).strip()])
     url = f"https://string-db.org/api/json/network?identifiers={ids}&species={species}&required_score={required_score}"
@@ -1366,9 +1278,7 @@ def plot_string_network(edges, nodes):
                       yaxis=dict(showgrid=False, zeroline=False, visible=False))
     return fig
 
-
 def plot_tree(Z, labels, support=None, title="", mid=None):
-    """Arbre UPGMA avec support bootstrap."""
     from scipy.cluster.hierarchy import leaves_list
     n = len(labels); labels = [str(l) for l in labels]
     lo = leaves_list(Z); ly = {int(l): i for i, l in enumerate(lo)}
@@ -1402,9 +1312,7 @@ def plot_tree(Z, labels, support=None, title="", mid=None):
                       plot_bgcolor='white')
     return fig
 
-
 def build_plink(gt, ind_df, snp_df, prefix="genome"):
-    """Export PLINK 1.9 binary (Purcell et al. 2007, AJHG 81:559)."""
     bio = BytesIO()
     with zipfile.ZipFile(bio, "w", zipfile.ZIP_DEFLATED) as zf:
         n, m = gt.shape; nb = (n + 3) // 4; buf = bytearray([0x6C, 0x1B, 0x01])
@@ -1424,9 +1332,7 @@ def build_plink(gt, ind_df, snp_df, prefix="genome"):
             f"{r['FID']}\t{r['IID']}\t0\t0\t0\t-9" for _, r in ind_df.iterrows()) + "\n")
     return bio.getvalue()
 
-
 def build_vcf(gt, ind_df, snp_df, proj="Genome"):
-    """Export VCF 4.2 — Danecek et al. 2011, Bioinformatics 27:2156."""
     h = ["##fileformat=VCFv4.2", f"##source={proj}",
          '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
          "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t" + "\t".join(ind_df["IID"].astype(str))]
@@ -1438,14 +1344,12 @@ def build_vcf(gt, ind_df, snp_df, proj="Genome"):
         b.append(f"{r['CHR']}\t{int(r['BP'])}\t{r['SNP']}\tA\tG\t.\tPASS\t.\tGT\t" + "\t".join(gts))
     return "\n".join(h + b) + "\n"
 
-
 def plot_missing(mi, ms):
     f = make_subplots(rows=1, cols=2, subplot_titles=("Missing/Ind", "Missing/SNP"))
     f.add_trace(go.Histogram(x=mi, nbinsx=60, marker_color="skyblue"), 1, 1)
     f.add_trace(go.Histogram(x=ms, nbinsx=60, marker_color="coral"), 1, 2)
     f.update_layout(height=400, showlegend=False)
     return f
-
 
 def plot_pca(s, v, l):
     f = px.scatter(pd.DataFrame({"PC1": s[:, 0], "PC2": s[:, 1], "Pop": l}),
@@ -1454,13 +1358,11 @@ def plot_pca(s, v, l):
     f.update_traces(marker=dict(size=10, line=dict(width=1, color="white")))
     return f
 
-
 def plot_mds(m, l):
     f = px.scatter(pd.DataFrame({"MDS1": m[:, 0], "MDS2": m[:, 1], "Pop": list(l)}),
                    x="MDS1", y="MDS2", color="Pop", title="MDS Manhattan", height=520)
     f.update_traces(marker=dict(size=11, line=dict(width=1, color="white")))
     return f
-
 
 def plot_manhattan(df, yc="P", title="", thr=None):
     if yc == "P":
@@ -1476,7 +1378,6 @@ def plot_manhattan(df, yc="P", title="", thr=None):
     fig.update_layout(title=title, xaxis_title="Chr", yaxis_title=yc, height=500)
     return fig
 
-
 def plot_ld(ld, b=20):
     if ld is None or ld.empty: return None
     d = ld.copy()
@@ -1484,7 +1385,6 @@ def plot_ld(ld, b=20):
     d["bin"] = (d["dist_kb"] // b) * b
     return px.line(d.groupby("bin")["r2"].mean().reset_index(), x="bin", y="r2",
                    title="LD decay (bins)", height=450)
-
 
 def plot_admix(Q, labs, pops, K):
     df = pd.DataFrame(Q, columns=[f"K{k+1}" for k in range(K)])
@@ -1498,7 +1398,6 @@ def plot_admix(Q, labs, pops, K):
     fig.update_layout(barmode="stack", title=f"Structure NMF K={K} (⚠️ NMF ≠ ADMIXTURE)", height=500)
     return fig, df
 
-
 def plot_gblup(df):
     fig = px.scatter(df, x="Phenotype", y="GEBV", title="GBLUP (héritabilité REML)")
     fig.update_traces(marker=dict(size=10, color="royalblue"))
@@ -1511,12 +1410,10 @@ def plot_gblup(df):
         except Exception: pass
     return fig
 
-
 def plot_pip(df):
     return px.bar(df.head(20), x="SNP", y="PIP",
                   title="PIP — Wakefield 2009 (Posterior Inclusion Probability)",
                   color="PIP", color_continuous_scale="Viridis")
-
 
 def plot_win_manh(df, vc='MEAN_FST', title="", sigma=3.0):
     df = df[np.isfinite(df[vc])].copy()
@@ -1536,7 +1433,6 @@ def plot_win_manh(df, vc='MEAN_FST', title="", sigma=3.0):
     fig.update_layout(title=title, xaxis_title='Pos (Mb)', yaxis_title=vc, height=520)
     return fig
 
-
 def plot_gene_track(si, gff, wk=50):
     if gff is None or gff.empty: return None
     ch = si["CHR"]; pos = si.get("BP", si.get("START", 0)); w = wk * 1000
@@ -1552,17 +1448,13 @@ def plot_gene_track(si, gff, wk=50):
                       yaxis=dict(showticklabels=False), height=400 + len(rg) * 20)
     return fig
 
-
 def plot_fst_heatmap(M, pops, title="FST pairwise"):
-    """Heatmap FST avec annotations."""
     fig = px.imshow(M, x=pops, y=pops, color_continuous_scale="Viridis",
                     title=title, aspect="auto", text_auto=".3f")
     fig.update_layout(height=max(400, 60 * len(pops)))
     return fig
 
-
 def plot_fst_heatmap_ci(M, ci_lo, ci_hi, pops, title="FST pairwise avec IC 95%"):
-    """Heatmap FST + affichage IC 95% dans le texte."""
     n = len(pops)
     txt = np.empty((n, n), dtype=object)
     for i in range(n):
@@ -1576,7 +1468,6 @@ def plot_fst_heatmap_ci(M, ci_lo, ci_hi, pops, title="FST pairwise avec IC 95%")
     fig.update_traces(text=txt, texttemplate="%{text}", textfont=dict(size=9))
     fig.update_layout(height=max(450, 70 * n))
     return fig
-
 
 # ============================================================
 # INTERFACE STREAMLIT
@@ -1592,18 +1483,15 @@ _KEYS = ["gt", "ind_df", "snp_df", "gt_filt", "ind_filt", "snp_filt", "gt_pre", 
          "nj_result", "nj_mid", "sel_gff", "sel_ann", "sel_ann_race", "sel_ann_group",
          "scan_df", "vep_res", "ncbi_gene_res", "lift_res", "perm_result"]
 
-
 def reset_derived():
     for k in _KEYS:
         if k not in ("gt", "ind_df", "snp_df"):
             st.session_state[k] = None
 
-
 def init_state():
     for k in _KEYS:
         if k not in st.session_state:
             st.session_state[k] = None
-
 
 def main():
     init_state()
@@ -1737,16 +1625,20 @@ def main():
             st.session_state.update({"gt_pruned": st.session_state.gt_filt[:, k],
                                       "snp_pruned": st.session_state.snp_filt[k].reset_index(drop=True)})
             st.success(f"✅ {st.session_state.gt_pruned.shape[1]} SNPs après pruning")
+        
         if st.session_state.gt_pruned is not None:
             c1, c2, c3 = st.columns(3)
             c1.metric("Avant", st.session_state.gt_filt.shape[1])
             c2.metric("Après", st.session_state.gt_pruned.shape[1])
             c3.metric("Réduction", f"{100*(1-st.session_state.gt_pruned.shape[1]/st.session_state.gt_filt.shape[1]):.1f}%")
+            
             if st.button("▶ LD Decay", key="ld_decay_btn"):
                 st.session_state.ld_df = ld_decay(st.session_state.gt_pruned, st.session_state.snp_pruned)
+                
             if st.session_state.ld_df is not None:
                 f = plot_ld(st.session_state.ld_df)
-                if f: st.plotly_chart(f, use_container_width=True, key="plot_ld_decay")
+                if f:
+                    st.plotly_chart(f, use_container_width=True, key="plot_ld_decay")
 
     # ---------- ONGLET 2 : Structure ----------
     with tabs[2]:
@@ -1770,12 +1662,11 @@ def main():
 
         st.divider()
         st.subheader("📊 Indices de Diversité Génétique (Ho, He, PIC, Fis)")
-        st.markdown("**Nei 1973, PNAS 70:3321** · **Botstein 1980, AJHG 32:314**")
         if st.button("Calculer la Diversité", type="primary"):
             try:
                 gu = st.session_state.gt_pruned if st.session_state.gt_pruned is not None else st.session_state.gt_filt
                 labs = st.session_state.ind_filt["FID"].astype(str).values
-                with st.spinner("Calcul des indices..."):
+                with st.spinner("Calcul..."):
                     div_df = compute_diversity(gu, labs, "div_key")
                 st.dataframe(div_df, use_container_width=True)
                 st.download_button("⬇ Télécharger CSV",
@@ -1783,19 +1674,14 @@ def main():
                                     file_name='tableau_diversite.csv', mime='text/csv')
                 fig_div = px.bar(div_df, x="Population",
                                  y=["H_Observee (Ho)", "H_Attendue (He)"], barmode="group",
-                                 title="Hétérozygotie Observée vs Attendue par Population",
-                                 labels={"value": "Hétérozygotie", "variable": "Type"})
+                                 title="Hétérozygotie Observée vs Attendue")
                 st.plotly_chart(fig_div, use_container_width=True)
-                st.info(f"**Moyennes :** He = {div_df['H_Attendue (He)'].mean():.4f} | "
-                        f"Ho = {div_df['H_Observee (Ho)'].mean():.4f} | "
-                        f"PIC = {div_df['PIC'].mean():.4f} | Fis = {div_df['Fis (Consanguinité)'].mean():.4f}")
             except Exception as e:
                 st.error(f"❌ Erreur : {e}")
 
     # ---------- ONGLET 3 : Structure NMF ----------
     with tabs[3]:
-        st.warning("⚠️ **NMF (Lee & Seung 1999, Nature 401:788) ≠ ADMIXTURE** (Alexander 2009). "
-                   "Résultats corrélés mais non identiques. Pour publication, valider avec ADMIXTURE ou fastStructure.")
+        st.warning("⚠️ **NMF (Lee & Seung 1999) ≠ ADMIXTURE**. Résultats corrélés mais non identiques.")
         if st.session_state.gt_filt is not None:
             st.subheader("📊 Choix de K par RMSE NMF")
             c1, c2 = st.columns(2)
@@ -1826,8 +1712,7 @@ def main():
 
     # ---------- ONGLET 4 : Démographie ----------
     with tabs[4]:
-        st.info("💡 **ROH simplifié** (tolérance het_tol). Pour publication, valider avec PLINK --homozyg. "
-                "**Ne** utilise la carte génétique (CM) si disponible, sinon 1 cM = 1 Mb (approximation).")
+        st.info("💡 **ROH simplifié** (tolérance het_tol). Pour publication, valider avec PLINK --homozyg.")
         if st.session_state.gt_filt is not None and st.button("▶ ROH + Ne", key="dem_btn"):
             try:
                 gu = st.session_state.gt_pruned if st.session_state.gt_pruned is not None else st.session_state.gt_filt
@@ -1862,15 +1747,14 @@ def main():
             st.subheader("📉 Ne historique")
             for pop, ne_df in st.session_state.ne_dict.items():
                 if ne_df is not None and not ne_df.empty:
-                    st.plotly_chart(px.line(ne_df, x="GenAgo", y="Ne",
-                                            title=f"Ne({pop}) — Sved 1971", log_y=True),
+                    st.plotly_chart(px.line(ne_df, x="GenAgo", y="Ne", title=f"Ne({pop}) — Sved 1971", log_y=True),
                                     use_container_width=True, key=f"plot_ne_{pop}")
 
     # ---------- ONGLET 5 : Sélection ----------
     with tabs[5]:
         st.subheader("🔍 Sélection & structure des populations")
         use_wc = st.checkbox("Weir & Cockerham 1984 (recommandé)", value=True, key="use_wc84")
-        do_boot = st.checkbox("Bootstrap CI 95% sur FST pairwise (Efron 1979)", value=False, key="do_boot")
+        do_boot = st.checkbox("Bootstrap CI 95% sur FST pairwise", value=False, key="do_boot")
         n_boot = st.slider("N bootstrap", 50, 500, 100, 50, key="n_boot_fst") if do_boot else 0
 
         if st.button("▶ FST pairwise + Reynolds", key="fst_btn"):
@@ -1881,7 +1765,7 @@ def main():
                 st.session_state.fst = fst_snp_wc(gu, lab)
                 st.session_state.fst_snp_df = su.copy()
                 M, pops = fst_pairwise(gu, lab, use_wc84=use_wc)
-                st.session_state.update({"fst_M": M, "fst_pops": pops})
+                                st.session_state.update({"fst_M": M, "fst_pops": pops})
                 if do_boot and n_boot >= 50:
                     with st.spinner(f"Bootstrap CI ({n_boot} rééchantillonnages)..."):
                         Mp, lo, hi, _ = fst_pairwise_bootstrap(gu, lab, n_boot=int(n_boot), use_wc84=use_wc)
@@ -2253,7 +2137,6 @@ def main():
     with tabs[7]:
         if st.session_state.gwas_res is not None:
             st.subheader("🎯 Fine-mapping ABF/PIP (Wakefield 2009)")
-            st.caption("ABF = √(1−W) · exp(BETA²·W / (2·SE²)) où W = v/(SE²+v), v = 0.04 (variance a priori)")
             prior_v = st.slider("Variance a priori (v)", 0.01, 0.5, 0.04, 0.01, key="prior_v")
             pip = fine_mapping(st.session_state.gwas_res, prior_var=prior_v)
             st.dataframe(pip[["SNP", "P", "BETA", "SE", "PIP"]].head(15), use_container_width=True)
@@ -2692,13 +2575,11 @@ def main():
                     hc, hb = lift_over(chrom, bp)
                     if hc:
                         st.success(f"✅ Trouvé chez Homme : chr{hc}:{hb}")
-                        st.info("💡 Interroger GWAS Catalog pour cette position : "
-                                "https://www.ebi.ac.uk/gwas/")
+                        st.info("💡 Interroger GWAS Catalog pour cette position : https://www.ebi.ac.uk/gwas/")
                     else:
                         st.error("❌ Aucune correspondance.")
         else:
             st.warning("Chargez des données.")
-
 
 if __name__ == "__main__":
     main()
