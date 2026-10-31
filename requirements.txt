@@ -1,1 +1,40 @@
+# ============================================================
+# Universal Livestock Genomics Pipeline v23.5
+# Dépendances pour reproduction (testées sur Python 3.10/3.11/3.12)
+# ============================================================
 
+# --- Core scientific ---
+numpy==1.26.4
+pandas==2.1.4
+scipy==1.11.4
+scikit-learn==1.3.2
+
+# --- Visualisation ---
+plotly==5.18.0
+matplotlib==3.8.3
+seaborn==0.13.2
+kaleido==0.2.1
+
+# --- Web UI (Streamlit pipeline complet) ---
+streamlit==1.32.0
+
+# --- Génétique & Bio ---
+biopython==1.83
+statsmodels==0.14.1
+
+# --- Enrichissement & Réseaux ---
+gseapy==1.1.2
+networkx==3.2.1
+
+# --- API HTTP ---
+requests==2.31.0
+
+# --- Notebook & Reproductibilité ---
+jupyter==1.0.0
+jupytext==1.16.1
+nbconvert==7.14.2
+ipykernel==6.29.0
+
+# --- Tests ---
+pytest==8.0.0
+pytest-cov==4.1.0
