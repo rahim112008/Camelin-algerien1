@@ -1620,25 +1620,26 @@ def main():
 
     # ---------- ONGLET 1 : LD ----------
     with tabs[1]:
-             if st.session_state.gt_filt is not None and st.button("▶ LD Pruning", key="ld_btn"):
-        k = ld_pruning(st.session_state.gt_filt, 50, 5, ld_r2)
-        st.session_state.update({"gt_pruned": st.session_state.gt_filt[:, k],
-                                  "snp_pruned": st.session_state.snp_filt[k].reset_index(drop=True)})
-        st.success(f"✅ {st.session_state.gt_pruned.shape[1]} SNPs après pruning")
+        if st.session_state.gt_filt is not None and st.button("▶ LD Pruning", key="ld_btn"):
+            k = ld_pruning(st.session_state.gt_filt, 50, 5, ld_r2)
+            st.session_state.update({"gt_pruned": st.session_state.gt_filt[:, k],
+                                      "snp_pruned": st.session_state.snp_filt[k].reset_index(drop=True)})
+            st.success(f"✅ {st.session_state.gt_pruned.shape[1]} SNPs après pruning")
     
-    if st.session_state.gt_pruned is not None:
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Avant", st.session_state.gt_filt.shape[1])
-        c2.metric("Après", st.session_state.gt_pruned.shape[1])
-        c3.metric("Réduction", f"{100*(1-st.session_state.gt_pruned.shape[1]/st.session_state.gt_filt.shape[1]):.1f}%")
+       if st.session_state.gt_pruned is not None:
+           c1, c2, c3 = st.columns(3)
+           c1.metric("Avant", st.session_state.gt_filt.shape[1])
+           c2.metric("Après", st.session_state.gt_pruned.shape[1])
+           c3.metric("Réduction", f"{100*(1-st.session_state.gt_pruned.shape[1]/st.session_state.gt_filt.shape[1]):.1f}%")
         
-        if st.button("▶ LD Decay", key="ld_decay_btn"):
-            st.session_state.ld_df = ld_decay(st.session_state.gt_pruned, st.session_state.snp_pruned)
+           if st.button("▶ LD Decay", key="ld_decay_btn"):
+               st.session_state.ld_df = ld_decay(st.session_state.gt_pruned, st.session_state.snp_pruned)
             
-        if st.session_state.ld_df is not None:
-            f = plot_ld(st.session_state.ld_df)
-            if f:
-                st.plotly_chart(f, use_container_width=True, key="plot_ld_decay")
+           if st.session_state.ld_df is not None:
+               f = plot_ld(st.session_state.ld_df)
+               if f:
+                  st.plotly_chart(f, use_container_width=True, key="plot_ld_decay")
+        
 
 
 
