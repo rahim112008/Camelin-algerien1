@@ -1765,7 +1765,7 @@ def main():
                 st.session_state.fst = fst_snp_wc(gu, lab)
                 st.session_state.fst_snp_df = su.copy()
                 M, pops = fst_pairwise(gu, lab, use_wc84=use_wc)
-                                st.session_state.update({"fst_M": M, "fst_pops": pops})
+                st.session_state.update({"fst_M": M, "fst_pops": pops})
                 if do_boot and n_boot >= 50:
                     with st.spinner(f"Bootstrap CI ({n_boot} rééchantillonnages)..."):
                         Mp, lo, hi, _ = fst_pairwise_bootstrap(gu, lab, n_boot=int(n_boot), use_wc84=use_wc)
