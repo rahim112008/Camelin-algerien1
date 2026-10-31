@@ -1343,7 +1343,7 @@ def plot_string_network(edges, nodes):
     except ImportError:
         st.error("⚠️ `networkx` non installé."); return None
     G = nx.Graph()
-        for _, r in edges.iterrows():
+    for _, r in edges.iterrows():
         G.add_edge(r["SOURCE"], r["TARGET"], weight=float(r["SCORE"]))
     pos = nx.spring_layout(G, seed=42, k=0.6)
     ex, ey = [], []
