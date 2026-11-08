@@ -1730,6 +1730,19 @@ def mantel_test(A, B, n_perm=999, seed=42):
     return r, (cnt + 1) / (n_perm + 1)
 
 # ============================================================
+# ASSISTANT IA POUR LA RÉDACTION
+# ============================================================
+def generer_discussion_ia(prompt_utilisateur, api_key):
+    """Envoie un prompt structuré à l'API Gemini et retourne le texte généré."""
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(prompt_utilisateur)
+        return response.text
+    except Exception as e:
+        return f"❌ Erreur de l'API IA : {e}"
+
+# ============================================================
 # INTERFACE STREAMLIT — PARTIE 1/2
 # ============================================================
 _KEYS = ["gt", "ind_df", "snp_df", "gt_filt", "ind_filt", "snp_filt", "gt_pre", "ind_pre", "snp_pre", "gt_pruned", "snp_pruned", "qc_stats", "pca_s", "pca_v", "mds_c", "king_K", "fst", "fst_M", "fst_pops", "admix_Q", "admix_K", "cv_res", "ld_df", "roh_df", "froh", "ne_dict", "reyn_D", "reyn_pops",
@@ -1967,10 +1980,9 @@ def main():
 
     st.title(f"🐾 {species_choice} Genomics Pipeline v23.7")
     tabs = st.tabs(["🧹 QC", "✂️ LD", "🧬 Structure", "🎨 Admixture", "📈 Démographie", "🔍 Sélection",
-                    "🧪 GWAS Classique", "🎯 Post-GWAS", "📈 GBLUP", "🧬 Annotation", "🧬 VEP & NCBI",
-                    "🧬 Structure 3D", "🧬 Alignement", "📤 Export", "🔬 Méta-analyse", "🧠 ML",
-                    "🧬 Génotypes/blocs", "🌍 Orthologue humain", "📐 Stats publication"])
-    NEED_QC = "⚠️ Lancez d'abord le QC (onglet 🧹)."
+                "🧪 GWAS Classique", "🎯 Post-GWAS", "📈 GBLUP", "🧬 Annotation", "🧬 VEP & NCBI",
+                "🧬 Structure 3D", "🧬 Alignement", "📤 Export", "🔬 Méta-analyse", "🧠 ML",
+                "🧬 Génotypes/blocs", "🌍 Orthologue humain", "📐 Stats publication", "📝 Rédaction Article"])
 
     # ---------------- TAB 0 : QC ----------------
     with tabs[0]:
@@ -3058,7 +3070,7 @@ def main():
         else:
             st.warning("Chargez des données.")
 
-    # ---------------- TAB 18 : Stats publication ----------------
+            # ---------------- TAB 18 : Stats publication ----------------
     with tabs[18]:
         st.subheader("📐 Statistiques pour publication")
         if ss.gt_filt is None:
@@ -3267,6 +3279,99 @@ def main():
                                             line=dict(color="red", dash="dash")))
                 st.plotly_chart(fg, width='stretch', key="plot_pub_ibd")
 
+    # ---------------- TAB 19 : Rédaction de l'Article (Manuel + IA) ----------------
+    with tabs[19]:
+        st.subheader("📝 Générateur de Brouillon d'Article Scientifique (IMRAD)")
+        st.info("Ce module assemble vos résultats. Vous pouvez soit générer la base automatique, soit demander à l'IA de rédiger la Discussion.")
+
+        if ss.gt_filt is None:
+            st.error("⚠️ Vous devez d'abord charger les données et lancer le QC.")
+        else:
+            # --- PARTIE A : Génération du squelette de base ---
+            if st.button("📄 1. Générer le brouillon de base (Markdown)", type="primary"):
+                article = []
+                article.append("# Analyse Génomique de la Diversité et des Signatures de Sélection chez le Dromadaire Algérien (Camelus dromedarius)")
+                article.append("**Auteurs :** [Votre Nom]¹, [Co-auteur]²")
+                article.append("---\n")
+                
+                n_ind = ss.qc_stats['n_ind_final']; n_snp = ss.qc_stats['n_snp_final']
+                
+                article.append("## Résumé (Abstract)")
+                article.append(f"**Contexte :** Le dromadaire algérien (*Camelus dromedarius*) est un animal d'une importance capitale. Cette étude explore la diversité génomique de {n_ind} individus.")
+                article.append(f"**Méthodes :** Un total de {n_snp} SNPs a été analysé. Des analyses de PCA, FST, Admixture et ROH ont été réalisées.")
+                article.append("**Résultats :** [À COMPLÉTER : Résumez vos principaux résultats]")
+                article.append("**Mots-clés :** Dromadaire, Génétique des populations, SNPs, Algérie")
+                article.append("---\n")
+
+                article.append("## 1. Introduction")
+                article.append("Le dromadaire est une espèce emblématique des zones arides. [À COMPLÉTER PAR L'AUTEUR]")
+                article.append("---\n")
+
+                article.append("## 2. Matériels et Méthodes")
+                article.append(f"Un total de {ss.qc_stats['n_ind_init']} individus a été génotypé. Après QC, {n_ind} individus et {n_snp} SNPs ont été retenus. Le QC a utilisé un seuil de MAF > {maf_t}.")
+                article.append("---\n")
+
+                article.append("## 3. Résultats")
+                article.append("### 3.1 Diversité Génétique")
+                if ss.div_df is not None:
+                    article.append(ss.div_df.to_markdown(index=False))
+                    article.append(f"\nLa diversité génétique (He) moyenne est de {ss.div_df['H_Attendue (He)'].mean():.4f}.")
+                
+                article.append("### 3.2 Structure des Populations")
+                if ss.fst_M is not None:
+                    fst_df = pd.DataFrame(ss.fst_M, index=ss.fst_pops, columns=ss.fst_pops).round(4)
+                    article.append(fst_df.to_markdown())
+                    article.append(f"\nLe FST global moyen est de {np.nanmean(ss.fst_M):.4f}.")
+                article.append("---\n")
+
+                article.append("## 4. Discussion")
+                article.append("[À COMPLÉTER PAR L'AUTEUR : Interprétez vos résultats ou utilisez l'IA ci-dessous.]")
+                article.append("---\n")
+
+                article.append("## 6. Références")
+                article.append("1. Burger, P. A., et al. (2019). Genetic diversity of dromedary camels. *Animal Genetics*.")
+                
+                full_article = "\n\n".join(article)
+                st.download_button("⬇ Télécharger le brouillon (.md)", data=full_article, file_name="Article_Squelette.md", mime="text/markdown", width='stretch')
+                st.session_state["base_article"] = full_article
+
+            st.divider()
+            # --- PARTIE B : Génération de la discussion par l'IA ---
+            st.subheader("🤖 2. Rédaction de la Discussion par l'IA")
+            st.info("L'IA va rédiger la section Discussion en anglais académique en se basant sur vos vrais résultats.")
+            
+            api_key_ia = st.text_input("Entrez votre clé API Google Gemini", type="password", key="gemini_api_key")
+            
+            if st.button("✨ Générer la Discussion avec l'IA", type="primary"):
+                if not api_key_ia:
+                    st.error("Veuillez entrer une clé API (obtenable gratuitement sur Google AI Studio).")
+                else:
+                    # Préparation du contexte
+                    contexte = f"- {ss.qc_stats['n_ind_final']} individus, {ss.qc_stats['n_snp_final']} SNPs.\n"
+                    contexte += f"- Populations : {', '.join(ss.ind_filt['FID'].unique())}.\n"
+                    if ss.div_df is not None:
+                        contexte += f"- Hétérozygotie attendue (He) moyenne : {ss.div_df['H_Attendue (He)'].mean():.4f}.\n"
+                        contexte += f"- Consanguinité (Fis) moyenne : {ss.div_df['Fis (Consanguinité)'].mean():.4f}.\n"
+                    if ss.fst_M is not None:
+                        contexte += f"- FST global moyen : {np.nanmean(ss.fst_M):.4f}.\n"
+                    
+                    prompt_ia = f"""
+                    Tu es un expert en génétique des populations. Rédige une section "Discussion" (400-500 mots) en anglais académique pour un article scientifique.
+                    Structure ta réponse en 3 paragraphes : 1. Diversité génétique, 2. Différenciation (FST), 3. Implications pour la conservation.
+                    Voici les résultats de mon étude sur le dromadaire algérien :
+                    {contexte}
+                    """
+                    
+                    with st.spinner("Rédaction en cours..."):
+                        texte_ia = generer_discussion_ia(prompt_ia, api_key_ia)
+                    
+                    st.success("✅ Discussion générée !")
+                    st.text_area("Copiez ce texte dans votre article (à relire et corriger)", value=texte_ia, height=400)
+
+                    # Option pour télécharger l'article complet (Squelette + IA)
+                    if "base_article" in st.session_state:
+                        article_final = st.session_state["base_article"].replace("[À COMPLÉTER PAR L'AUTEUR : Interprétez vos résultats ou utilisez l'IA ci-dessous.]", texte_ia)
+                        st.download_button("⬇ Télécharger l'Article COMPLET (avec l'IA) (.md)", data=article_final, file_name="Article_Complet_IA.md", mime="text/markdown", width='stretch')
 
 # ============================================================
 # POINT D'ENTRÉE
