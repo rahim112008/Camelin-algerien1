@@ -10,3 +10,4 @@ biopython
 statsmodels
 requests
 networkx
+google-generativeai
