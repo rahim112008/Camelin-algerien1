@@ -11,3 +11,4 @@ statsmodels
 requests
 networkx
 google-generativeai
+tabulate
