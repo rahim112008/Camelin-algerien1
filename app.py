@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
+import google.generativeai as genai
 from plotly.subplots import make_subplots
 from scipy import stats
 from scipy.special import gammaln
