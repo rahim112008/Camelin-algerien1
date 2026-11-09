@@ -1659,8 +1659,11 @@ def main():
                     Kt = np.triu(ss.king_K, 1); st.info(f"Paires apparentées (KING φ > 0.177, 1er degré) : **{int((Kt > 0.177).sum())}** · 2e degré (φ > 0.088) : **{int((Kt > 0.088).sum())}**")
             st.divider(); st.subheader("📊 Indices de Diversité Génétique (Ho, He, PIC, Fis)"); st.markdown("Indices standards (Nei, 1973 ; Botstein et al., 1980).")
             if st.button("Calculer la Diversité", type="primary", key="div_btn"):
-                try: with st.spinner("Calcul..."): ss.div_df = compute_diversity(gu, iu["FID"].astype(str).values)
-                except Exception as e: st.error(f"❌ {e}")
+                try: 
+                    with st.spinner("Calcul..."):
+                        ss.div_df = compute_diversity(gu, iu["FID"].astype(str).values)
+                except Exception as e:
+                        st.error(f"❌ {e}")
             if ss.div_df is not None and not ss.div_df.empty:
                 d = ss.div_df; st.dataframe(d, width='stretch'); st.download_button("⬇ CSV", d.to_csv(index=False).encode("utf-8"), "tableau_diversite.csv", "text/csv"); st.plotly_chart(px.bar(d, x="Population", y=["H_Observee (Ho)", "H_Attendue (He)"], barmode="group", title="Ho vs He par Population", labels={"value": "Hétérozygotie", "variable": "Type"}), width='stretch', key="plot_div"); st.info(f"**Moyennes :** He = {d['H_Attendue (He)'].mean():.4f} | Ho = {d['H_Observee (Ho)'].mean():.4f} | PIC = {d['PIC'].mean():.4f} | Fis = {d['Fis (Consanguinité)'].mean():.4f}")
             elif ss.div_df is not None: st.warning("Aucune population avec ≥ 3 individus.")
