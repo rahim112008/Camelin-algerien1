@@ -1980,9 +1980,10 @@ def main():
 
     st.title(f"🐾 {species_choice} Genomics Pipeline v23.7")
     tabs = st.tabs(["🧹 QC", "✂️ LD", "🧬 Structure", "🎨 Admixture", "📈 Démographie", "🔍 Sélection",
-                "🧪 GWAS Classique", "🎯 Post-GWAS", "📈 GBLUP", "🧬 Annotation", "🧬 VEP & NCBI",
-                "🧬 Structure 3D", "🧬 Alignement", "📤 Export", "🔬 Méta-analyse", "🧠 ML",
-                "🧬 Génotypes/blocs", "🌍 Orthologue humain", "📐 Stats publication", "📝 Rédaction Article"])
+            "🧪 GWAS Classique", "🎯 Post-GWAS", "📈 GBLUP", "🧬 Annotation", "🧬 VEP & NCBI",
+            "🧬 Structure 3D", "🧬 Alignement", "📤 Export", "🔬 Méta-analyse", "🧠 ML",
+            "🧬 Génotypes/blocs", "🌍 Orthologue humain", "📐 Stats publication", "📝 Rédaction Article",
+            "🕵️‍♂️ Diagnostic d'Artefacts"]) # <-- AJOUT ICI
 
     # ---------------- TAB 0 : QC ----------------
     with tabs[0]:
