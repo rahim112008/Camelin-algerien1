@@ -3373,6 +3373,108 @@ def main():
                         article_final = st.session_state["base_article"].replace("[À COMPLÉTER PAR L'AUTEUR : Interprétez vos résultats ou utilisez l'IA ci-dessous.]", texte_ia)
                         st.download_button("⬇ Télécharger l'Article COMPLET (avec l'IA) (.md)", data=article_final, file_name="Article_Complet_IA.md", mime="text/markdown", width='stretch')
 
+# ---------------- TAB 20 : Diagnostic d'Artefacts (Batch Effect / Contamination) ----------------
+with tabs[20]:
+    st.subheader("🕵️‍♂️ Diagnostic : Excès d'Hétérozygotie et Effets de Lot")
+    st.info("Ce module vous aide à vérifier si le FIS fortement négatif (ex: -0.44) est un artefact de laboratoire (batch effect, contamination) ou un vrai signal biologique.")
+
+    if ss.gt_filt is None:
+        st.warning("Veuillez d'abord charger vos données et lancer le QC.")
+    else:
+        # 1. Détection des individus avec un taux d'hétérozygotie suspect
+        st.markdown("### 1️⃣ Identification des individus suspects (Contamination / Duplicatas)")
+        
+        # Calcul de l'hétérozygotie observée par individu
+        het_obs = het(ss.gt_filt) # Fonction déjà définie dans votre code
+        df_het = pd.DataFrame({
+            "IID": ss.ind_filt["IID"].values,
+            "FID": ss.ind_filt["FID"].values,
+            "Het_Rate": het_obs
+        })
+        
+        # Calcul de la moyenne globale et de l'écart-type
+        mean_het = df_het["Het_Rate"].mean()
+        std_het = df_het["Het_Rate"].std()
+        
+        # Seuil : moyenne + 3 écarts-types (ou un seuil fixe que vous jugez anormal)
+        seuil_het = mean_het + 3 * std_het 
+        suspects = df_het[df_het["Het_Rate"] > seuil_het]
+        
+        st.write(f"**Taux d'hétérozygotie moyen** de la population : {mean_het:.4f} ± {std_het:.4f}")
+        st.write(f"**Individus suspects** (taux > {seuil_het:.4f}) :")
+        
+        if not suspects.empty:
+            st.warning(f"⚠️ {len(suspects)} individus présentent un taux d'hétérozygotie anormalement élevé (possible contamination croisée d'ADN).")
+            st.dataframe(suspects.sort_values("Het_Rate", ascending=False), width='stretch')
+            st.download_button("⬇ Télécharger la liste des suspects (CSV)", 
+                               suspects.to_csv(index=False).encode(), 
+                               "individus_suspects.csv", "text/csv")
+        else:
+            st.success("✅ Aucun individu n'a un taux d'hétérozygotie extrême.")
+
+        st.divider()
+        
+        # 2. Croisement avec les métadonnées (Batch Effect)
+        st.markdown("### 2️⃣ Vérification de l'Effet de Lot (Batch Effect)")
+        st.markdown("Uploadez un fichier CSV contenant au moins les colonnes `IID` et `Batch` (ou `Date`, `Plaque`) pour voir si le FIS négatif vient d'un problème technique de laboratoire.")
+        
+        meta_file = st.file_uploader("Uploader le CSV des métadonnées (IID, Batch...)", type=["csv", "txt"], key="meta_csv")
+        
+        if meta_file is not None:
+            try:
+                meta_df = pd.read_csv(io.BytesIO(meta_file.getvalue()))
+                
+                if "IID" not in meta_df.columns:
+                    st.error("Le fichier doit contenir une colonne 'IID'.")
+                else:
+                    # Fusionner avec les données
+                    merged = pd.merge(df_het, meta_df, on="IID", how="left")
+                    
+                    batch_col = st.selectbox("Sélectionnez la colonne de lot :", [c for c in meta_df.columns if c != "IID"])
+                    
+                    if batch_col:
+                        # Calcul du FIS moyen par lot
+                        # Note: Pour simplifier, on regarde la moyenne d'Het_Rate par lot
+                        batch_stats = merged.groupby(batch_col)["Het_Rate"].agg(["count", "mean", "std"]).reset_index()
+                        batch_stats.columns = [batch_col, "N", "Het_Moyen", "Het_Ecart-Type"]
+                        
+                        st.write(f"**Statistiques par {batch_col} :**")
+                        st.dataframe(batch_stats, width='stretch')
+                        
+                        # Graphique
+                        fig_batch = px.box(merged, x=batch_col, y="Het_Rate", color=batch_col, 
+                                           title=f"Distribution de l'Hétérozygotie par {batch_col}",
+                                           labels={"Het_Rate": "Taux d'hétérozygotie"})
+                        st.plotly_chart(fig_batch, width='stretch', key="plot_batch")
+                        
+                        if batch_stats["Het_Moyen"].std() > 0.05:
+                            st.error("❌ **Effet de lot détecté !** Les lots ont des taux d'hétérozygotie très différents. Il faut analyser les lots séparément ou exclure le lot problématique.")
+                        else:
+                            st.success("✅ Pas d'effet de lot évident sur l'hétérozygotie.")
+            except Exception as e:
+                st.error(f"❌ Erreur de lecture : {e}")
+
+        st.divider()
+        
+        # 3. Filtrage pragmatique
+        st.markdown("### 3️⃣ Filtrage des individus problématiques")
+        st.markdown("Si vous pensez que ces individus sont contaminés, vous pouvez les retirer des analyses sans avoir à recharger les données.")
+        
+        if st.button("🧹 Exclure les individus suspects et re-lancer le QC", type="primary"):
+            if not suspects.empty:
+                # Garder les individus qui ne sont pas dans la liste des suspects
+                keep_mask = ~ss.ind_filt["IID"].isin(suspects["IID"])
+                
+                ss.gt_filt = ss.gt_filt[keep_mask]
+                ss.ind_filt = ss.ind_filt[keep_mask].reset_index(drop=True)
+                
+                # Réinitialiser les analyses aval
+                reset_derived(keep=("gt", "ind_df", "snp_df", "gt_filt", "ind_filt", "snp_filt"))
+                
+                st.success(f"✅ {len(suspects)} individus exclus. Le jeu de données contient maintenant {ss.gt_filt.shape[0]} individus. Relancez les analyses de structure.")
+            else:
+                st.info("Aucun individu à exclure.")
+
 # ============================================================
 # POINT D'ENTRÉE
 # ============================================================
