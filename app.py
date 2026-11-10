@@ -38,7 +38,7 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 st.set_page_config(page_title="🧬 Helixa | Analyses Génomiques", page_icon="🧬",
                    layout="wide", initial_sidebar_state="expanded")
 
-# --- DESIGN HELIXA (Deep Space Theme) ---
+# --- DESIGN HELIXA (Deep Space Theme - Force Brute) ---
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap');
