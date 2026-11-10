@@ -41,58 +41,50 @@ st.set_page_config(page_title="🧬 Helixa | Analyses Génomiques", page_icon="�
 # --- DESIGN HELIXA (Deep Space Theme) ---
 st.markdown("""
 <style>
-    /* Police générale */
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap');
     
-    html, body, [class*="css"] {
-        font-family: 'Inter', sans-serif;
+    /* Forcer la police sur TOUS les éléments de Streamlit */
+    html, body, [class*="css"], .stMarkdown, p, h1, h2, h3, h4, h5, h6, label, div {
+        font-family: 'Inter', sans-serif !important;
     }
     
-    /* Titres */
-    h1, h2, h3 {
+    /* Titres avec Space Grotesk */
+    h1, h2, h3, h4, h5, h6 {
         font-family: 'Space Grotesk', sans-serif !important;
         color: #e8eaf6 !important;
-        letter-spacing: -0.02em;
     }
     
-    /* Fond de l'application */
-    .stApp {
-        background: 
-            radial-gradient(900px 500px at 85% -10%, rgba(138,43,226,.16), transparent 60%),
-            radial-gradient(800px 500px at -10% 30%, rgba(0,191,255,.10), transparent 60%),
-            #04050d;
-        color: #e8eaf6;
+    /* Forcer le fond sombre partout */
+    .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {
+        background-color: #04050d !important;
+        background-image: radial-gradient(900px 500px at 85% -10%, rgba(138,43,226,.16), transparent 60%), radial-gradient(800px 500px at -10% 30%, rgba(0,191,255,.10), transparent 60%) !important;
+        color: #e8eaf6 !important;
     }
     
-    /* Couleur des textes secondaires */
-    p, span, label {
-        color: #9aa0c3 !important;
+    /* Barre latérale */
+    [data-testid="stSidebar"] {
+        background-color: #080a18 !important;
+        border-right: 1px solid rgba(255, 255, 255, 0.1) !important;
     }
     
-    /* Boutons avec dégradé Aurora */
+    /* Boutons */
     .stButton>button {
-        background: linear-gradient(110deg, #8a2be2 0%, #00bfff 50%, #ff69b4 100%);
+        background: linear-gradient(110deg, #8a2be2 0%, #00bfff 50%, #ff69b4 100%) !important;
         color: white !important;
-        border: none;
-        border-radius: 999px;
-        padding: 0.6rem 1.5rem;
-        font-weight: 600;
-        transition: 0.3s;
+        border: none !important;
+        border-radius: 999px !important;
+        font-weight: 600 !important;
+        transition: 0.3s !important;
     }
     .stButton>button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 20px rgba(0, 191, 255, 0.4);
+        transform: translateY(-2px) !important;
+        box-shadow: 0 8px 20px rgba(0, 191, 255, 0.4) !important;
     }
     
-    /* Barre latérale (Sidebar) sombre */
-    [data-testid="stSidebar"] {
-        background-color: #080a18;
-        border-right: 1px solid rgba(255,255,255,0.1);
-    }
-    
-    /* Cacher le menu Streamlit et le footer par défaut */
+    /* Cacher les éléments Streamlit inutiles */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
+    [data-testid="stToolbar"] {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
