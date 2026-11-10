@@ -88,6 +88,30 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# --- FORCER L'AFFICHAGE DU MENU SUR MOBILE ---
+st.markdown(
+    """
+    <style>
+    /* Cible le conteneur du bouton d'ouverture du menu */
+    div[data-testid="stSidebarCollapsedControl"] {
+        background-color: #2e7d32 !important;  /* Couleur de fond vert */
+        border-radius: 50% !important;         /* Forme ronde */
+        padding: 10px !important;              /* Espace autour de l'icône */
+        box-shadow: 0 2px 10px rgba(0,0,0,0.5) !important;
+        z-index: 9999 !important;              /* S'assure qu'il est au-dessus */
+        display: block !important;             /* Force l'affichage */
+    }
+    /* Agrandit la flèche à l'intérieur */
+    div[data-testid="stSidebarCollapsedControl"] svg {
+        height: 30px !important;
+        width: 30px !important;
+        color: white !important; /* Couleur de la flèche */
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 # ============================================================
 # CONFIGURATION DES ESPÈCES
 # ============================================================
