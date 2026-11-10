@@ -112,6 +112,14 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+# --- BOUTON DE SECOURS POUR OUVRIR LE MENU ---
+import time
+
+if st.button("☰ Ouvrir le menu", use_container_width=True):
+    st.session_state.sidebar_state = 'expanded'
+    time.sleep(0.1) 
+    st.rerun()
+
 # ============================================================
 # CONFIGURATION DES ESPÈCES
 # ============================================================
