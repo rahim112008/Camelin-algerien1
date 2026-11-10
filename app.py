@@ -1578,7 +1578,7 @@ def main():
     # ============================================================
     # SIDEBAR
     # ============================================================
-    with st.sidebar:
+    with st.expander("☰ Cliquez ici pour ouvrir le menu", expanded=True):
         st.title("🧬 Helixa | Genomics")
         species_choice = st.selectbox("🐾 Sélectionnez l'espèce", list(SPECIES_CONFIG.keys()))
         cfg = SPECIES_CONFIG[species_choice]
