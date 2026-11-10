@@ -1563,7 +1563,7 @@ def main():
     # SIDEBAR
     # ============================================================
     with st.sidebar:
-        st.title("🧬 Universal Genomics")
+        st.title("🧬 Helixa | Genomics")
         species_choice = st.selectbox("🐾 Sélectionnez l'espèce", list(SPECIES_CONFIG.keys()))
         cfg = SPECIES_CONFIG[species_choice]
         AUTO = cfg["autosomes"]; ARS = cfg["ars"]; TAXON = cfg["taxon"]
