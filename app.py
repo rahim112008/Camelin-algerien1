@@ -32,8 +32,69 @@ except ImportError:
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-st.set_page_config(page_title="🧬 Universal Genomics v23.7", page_icon="🧬",
+# ============================================================
+# 1. CONFIGURATION DE LA PAGE & DESIGN HELIXA
+# ============================================================
+st.set_page_config(page_title="🧬 Helixa | Analyses Génomiques", page_icon="🧬",
                    layout="wide", initial_sidebar_state="expanded")
+
+# --- DESIGN HELIXA (Deep Space Theme) ---
+st.markdown("""
+<style>
+    /* Police générale */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap');
+    
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif;
+    }
+    
+    /* Titres */
+    h1, h2, h3 {
+        font-family: 'Space Grotesk', sans-serif !important;
+        color: #e8eaf6 !important;
+        letter-spacing: -0.02em;
+    }
+    
+    /* Fond de l'application */
+    .stApp {
+        background: 
+            radial-gradient(900px 500px at 85% -10%, rgba(138,43,226,.16), transparent 60%),
+            radial-gradient(800px 500px at -10% 30%, rgba(0,191,255,.10), transparent 60%),
+            #04050d;
+        color: #e8eaf6;
+    }
+    
+    /* Couleur des textes secondaires */
+    p, span, label {
+        color: #9aa0c3 !important;
+    }
+    
+    /* Boutons avec dégradé Aurora */
+    .stButton>button {
+        background: linear-gradient(110deg, #8a2be2 0%, #00bfff 50%, #ff69b4 100%);
+        color: white !important;
+        border: none;
+        border-radius: 999px;
+        padding: 0.6rem 1.5rem;
+        font-weight: 600;
+        transition: 0.3s;
+    }
+    .stButton>button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 20px rgba(0, 191, 255, 0.4);
+    }
+    
+    /* Barre latérale (Sidebar) sombre */
+    [data-testid="stSidebar"] {
+        background-color: #080a18;
+        border-right: 1px solid rgba(255,255,255,0.1);
+    }
+    
+    /* Cacher le menu Streamlit et le footer par défaut */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
 
 # ============================================================
 # CONFIGURATION DES ESPÈCES
