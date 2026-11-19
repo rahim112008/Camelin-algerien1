@@ -2062,89 +2062,101 @@ def main():
 
     # ---------------- TAB 10 : VEP & NCBI ----------------
     with tabs[10]:
-        st.subheader("🧬 Annotation Fonctionnelle (VEP & NCBI)")
-        sources_snp = []
-        if ss.get("pair_res_group") is not None and not ss.pair_res_group.empty: sources_snp.append("Top SNPs Groupe")
-        if ss.get("pair_res_race") is not None and not ss.pair_res_race.empty: sources_snp.append("Top SNPs Race")
-        if ss.get("gwas_res") is not None and len(ss.gwas_res): sources_snp.append("Top SNPs GWAS")
-        if ss.get("win_fst") is not None and not ss.win_fst.empty: sources_snp.append("Top SNPs FST")
-        sources_snp.append("Saisie manuelle")
-        src_snp = st.selectbox("Source des SNPs", sources_snp, key="vep_src"); snps_to_analyze = []
-        if src_snp == "Top SNPs Groupe": snps_to_analyze = ss.pair_res_group["SNP"].head(20).tolist()
-        elif src_snp == "Top SNPs Race": snps_to_analyze = ss.pair_res_race["SNP"].head(20).tolist()
-        elif src_snp == "Top SNPs GWAS": snps_to_analyze = ss.gwas_res.sort_values("P")["SNP"].head(20).tolist()
-        elif src_snp == "Top SNPs FST": snps_to_analyze = ss.win_fst["TOP_SNP"].head(20).tolist()
+        # DEMO_EXT_BLOCK
+        if DEMO:
+            st.info("🔬 VEP & NCBI interrogent des bases externes (Ensembl, NCBI) : disponible avec vos vraies données dans la version complète.")
         else:
-            txt = st.text_area("Liste de SNPs (1/ligne)", key="vep_manual")
-            if txt.strip(): snps_to_analyze = [s.strip() for s in txt.splitlines() if s.strip()]
-        if snps_to_analyze:
-            st.info(f"📊 {len(snps_to_analyze)} SNPs sélectionnés."); snp_full = ss.snp_filt if ss.snp_filt is not None else ss.snp_df; items = []; approx = 0; ACGT = ("A", "C", "G", "T")
-            for s in snps_to_analyze:
-                s = str(s)
-                if s.lower().startswith("rs"): items.append((s, "id", s)); continue
-                row = snp_full[snp_full["SNP"].astype(str) == s] if snp_full is not None else pd.DataFrame()
-                if row.empty: continue
-                r = row.iloc[0]; a1 = str(r.get("A1", ".")); a2 = str(r.get("A2", "."))
-                if a1 not in ACGT or a2 not in ACGT: a1, a2 = "A", "G"; approx += 1
-                items.append((s, "region", f"{r['CHR']} {int(r['BP'])} {int(r['BP'])} {a1}/{a2} 1"))
-            if approx: st.caption(f"ℹ️ {approx} SNP(s) avec allèles non-ACGT : conséquence positionnelle approximative.")
-            st.caption("ℹ️ Les coordonnées doivent correspondre à l'assemblage Ensembl (ARS-UCD1.2 pour bovin).")
-            if st.button("🔬 Lancer VEP", type="primary", key="run_vep_btn"):
-                with st.spinner("Interrogation Ensembl VEP..."): vep_res = run_vep_api(items, VEP_SPECIES)
-                if vep_res.empty: st.warning("VEP n'a retourné aucun résultat.")
-                else: vep_res["LOCALISATION"] = vep_res["CONSEQUENCE"].apply(traduire_consequence_vep); ss.vep_res = vep_res; st.success("✅ VEP terminé.")
-            if ss.get("vep_res") is not None and not ss.vep_res.empty: st.dataframe(ss.vep_res[["SNP", "GENE", "LOCALISATION", "CONSEQUENCE", "IMPACT", "AMINO_ACID_CHANGE"]], width='stretch'); st.download_button("⬇ CSV VEP", ss.vep_res.to_csv(index=False).encode(), "vep_results.csv", "text/csv")
-        st.markdown("### NCBI Gene"); genes_to_fetch = []
-        if ss.get("vep_res") is not None and "GENE" in ss.vep_res.columns: genes_to_fetch = ss.vep_res["GENE"].dropna().unique().tolist()
-        elif ss.get("sel_ann") is not None and "GENE" in ss.sel_ann.columns: genes_to_fetch = ss.sel_ann["GENE"].dropna().unique().tolist()
-        genes_to_fetch = [g for g in genes_to_fetch if str(g).strip() not in ("N/A", "Intergenic/Non-codant", "Région régulatrice", "Unknown", "nan", "")]
-        if genes_to_fetch:
-            st.info(f"🧬 {len(genes_to_fetch)} gènes valides.")
-            if st.button("🏛️ Récupérer NCBI", type="primary", key="run_ncbi_btn"):
-                with st.spinner("NCBI Datasets..."): ss.ncbi_gene_res = fetch_ncbi_gene_info(genes_to_fetch[:20], TAXON)
-            if ss.get("ncbi_gene_res") is not None and not ss.ncbi_gene_res.empty: st.dataframe(ss.ncbi_gene_res, width='stretch'); st.download_button("⬇ CSV NCBI", ss.ncbi_gene_res.to_csv(index=False).encode(), "ncbi_gene_info.csv", "text/csv")
+            st.subheader("🧬 Annotation Fonctionnelle (VEP & NCBI)")
+            sources_snp = []
+            if ss.get("pair_res_group") is not None and not ss.pair_res_group.empty: sources_snp.append("Top SNPs Groupe")
+            if ss.get("pair_res_race") is not None and not ss.pair_res_race.empty: sources_snp.append("Top SNPs Race")
+            if ss.get("gwas_res") is not None and len(ss.gwas_res): sources_snp.append("Top SNPs GWAS")
+            if ss.get("win_fst") is not None and not ss.win_fst.empty: sources_snp.append("Top SNPs FST")
+            sources_snp.append("Saisie manuelle")
+            src_snp = st.selectbox("Source des SNPs", sources_snp, key="vep_src"); snps_to_analyze = []
+            if src_snp == "Top SNPs Groupe": snps_to_analyze = ss.pair_res_group["SNP"].head(20).tolist()
+            elif src_snp == "Top SNPs Race": snps_to_analyze = ss.pair_res_race["SNP"].head(20).tolist()
+            elif src_snp == "Top SNPs GWAS": snps_to_analyze = ss.gwas_res.sort_values("P")["SNP"].head(20).tolist()
+            elif src_snp == "Top SNPs FST": snps_to_analyze = ss.win_fst["TOP_SNP"].head(20).tolist()
+            else:
+                txt = st.text_area("Liste de SNPs (1/ligne)", key="vep_manual")
+                if txt.strip(): snps_to_analyze = [s.strip() for s in txt.splitlines() if s.strip()]
+            if snps_to_analyze:
+                st.info(f"📊 {len(snps_to_analyze)} SNPs sélectionnés."); snp_full = ss.snp_filt if ss.snp_filt is not None else ss.snp_df; items = []; approx = 0; ACGT = ("A", "C", "G", "T")
+                for s in snps_to_analyze:
+                    s = str(s)
+                    if s.lower().startswith("rs"): items.append((s, "id", s)); continue
+                    row = snp_full[snp_full["SNP"].astype(str) == s] if snp_full is not None else pd.DataFrame()
+                    if row.empty: continue
+                    r = row.iloc[0]; a1 = str(r.get("A1", ".")); a2 = str(r.get("A2", "."))
+                    if a1 not in ACGT or a2 not in ACGT: a1, a2 = "A", "G"; approx += 1
+                    items.append((s, "region", f"{r['CHR']} {int(r['BP'])} {int(r['BP'])} {a1}/{a2} 1"))
+                if approx: st.caption(f"ℹ️ {approx} SNP(s) avec allèles non-ACGT : conséquence positionnelle approximative.")
+                st.caption("ℹ️ Les coordonnées doivent correspondre à l'assemblage Ensembl (ARS-UCD1.2 pour bovin).")
+                if st.button("🔬 Lancer VEP", type="primary", key="run_vep_btn"):
+                    with st.spinner("Interrogation Ensembl VEP..."): vep_res = run_vep_api(items, VEP_SPECIES)
+                    if vep_res.empty: st.warning("VEP n'a retourné aucun résultat.")
+                    else: vep_res["LOCALISATION"] = vep_res["CONSEQUENCE"].apply(traduire_consequence_vep); ss.vep_res = vep_res; st.success("✅ VEP terminé.")
+                if ss.get("vep_res") is not None and not ss.vep_res.empty: st.dataframe(ss.vep_res[["SNP", "GENE", "LOCALISATION", "CONSEQUENCE", "IMPACT", "AMINO_ACID_CHANGE"]], width='stretch'); st.download_button("⬇ CSV VEP", ss.vep_res.to_csv(index=False).encode(), "vep_results.csv", "text/csv")
+            st.markdown("### NCBI Gene"); genes_to_fetch = []
+            if ss.get("vep_res") is not None and "GENE" in ss.vep_res.columns: genes_to_fetch = ss.vep_res["GENE"].dropna().unique().tolist()
+            elif ss.get("sel_ann") is not None and "GENE" in ss.sel_ann.columns: genes_to_fetch = ss.sel_ann["GENE"].dropna().unique().tolist()
+            genes_to_fetch = [g for g in genes_to_fetch if str(g).strip() not in ("N/A", "Intergenic/Non-codant", "Région régulatrice", "Unknown", "nan", "")]
+            if genes_to_fetch:
+                st.info(f"🧬 {len(genes_to_fetch)} gènes valides.")
+                if st.button("🏛️ Récupérer NCBI", type="primary", key="run_ncbi_btn"):
+                    with st.spinner("NCBI Datasets..."): ss.ncbi_gene_res = fetch_ncbi_gene_info(genes_to_fetch[:20], TAXON)
+                if ss.get("ncbi_gene_res") is not None and not ss.ncbi_gene_res.empty: st.dataframe(ss.ncbi_gene_res, width='stretch'); st.download_button("⬇ CSV NCBI", ss.ncbi_gene_res.to_csv(index=False).encode(), "ncbi_gene_info.csv", "text/csv")
 
     # ---------------- TAB 11 : Structure 3D ----------------
     with tabs[11]:
-        st.subheader("🧬 AlphaFold — Visualisation 3D"); genes_to_structure = []
-        for key in ("vep_res", "sel_ann", "ann_df"):
-            v = ss.get(key)
-            if v is not None and hasattr(v, "columns") and "GENE" in v.columns and not v.empty:
-                genes_to_structure = [g for g in v["GENE"].unique() if str(g).strip() not in ("N/A", "Intergenic/Non-codant", "Région régulatrice", "Unknown", "nan", "")]
-                if genes_to_structure: break
-        if not genes_to_structure: st.warning("⚠️ Lancez d'abord VEP ou Annotation.")
+        # DEMO_EXT_BLOCK
+        if DEMO:
+            st.info("🧊 La structure 3D (UniProt / AlphaFold) nécessite de vrais gènes issus de vos données : disponible dans la version complète.")
         else:
-            c1, c2, c3 = st.columns(3); target_gene = c1.selectbox("Gène", genes_to_structure, key="gene_3d"); view_style = c2.selectbox("Style", ["cartoon", "stick", "sphere", "line"], key="style_3d"); color_scheme = c3.selectbox("Coloration", ["spectrum", "chainHetatm", "ssPyMol"], key="color_3d"); highlight_res = st.text_input("Surligner résidu (ex: 123)", key="hl_res")
-            if st.button("🔬 Charger 3D", type="primary", key="btn_load_3d"):
-                with st.spinner(f"Recherche pour {target_gene}..."):
-                    uid = fetch_uniprot_id(target_gene, TAXON)
-                    if uid:
-                        pdb = fetch_alphafold_pdb(uid)
-                        if pdb: ss.pdb_gene = target_gene; ss.pdb_data = pdb; st.success(f"✅ UniProt : {uid}")
-                        else: st.error("❌ AlphaFold introuvable.")
-                    else: st.error("❌ Gène non trouvé dans UniProt.")
-            if ss.pdb_data and ss.pdb_gene == target_gene: st.info("💡 Cliquer-glisser pour tourner, molette pour zoomer."); render_3d_structure(ss.pdb_data, style=view_style, color_scheme=color_scheme, highlight_res=highlight_res)
+            st.subheader("🧬 AlphaFold — Visualisation 3D"); genes_to_structure = []
+            for key in ("vep_res", "sel_ann", "ann_df"):
+                v = ss.get(key)
+                if v is not None and hasattr(v, "columns") and "GENE" in v.columns and not v.empty:
+                    genes_to_structure = [g for g in v["GENE"].unique() if str(g).strip() not in ("N/A", "Intergenic/Non-codant", "Région régulatrice", "Unknown", "nan", "")]
+                    if genes_to_structure: break
+            if not genes_to_structure: st.warning("⚠️ Lancez d'abord VEP ou Annotation.")
+            else:
+                c1, c2, c3 = st.columns(3); target_gene = c1.selectbox("Gène", genes_to_structure, key="gene_3d"); view_style = c2.selectbox("Style", ["cartoon", "stick", "sphere", "line"], key="style_3d"); color_scheme = c3.selectbox("Coloration", ["spectrum", "chainHetatm", "ssPyMol"], key="color_3d"); highlight_res = st.text_input("Surligner résidu (ex: 123)", key="hl_res")
+                if st.button("🔬 Charger 3D", type="primary", key="btn_load_3d"):
+                    with st.spinner(f"Recherche pour {target_gene}..."):
+                        uid = fetch_uniprot_id(target_gene, TAXON)
+                        if uid:
+                            pdb = fetch_alphafold_pdb(uid)
+                            if pdb: ss.pdb_gene = target_gene; ss.pdb_data = pdb; st.success(f"✅ UniProt : {uid}")
+                            else: st.error("❌ AlphaFold introuvable.")
+                        else: st.error("❌ Gène non trouvé dans UniProt.")
+                if ss.pdb_data and ss.pdb_gene == target_gene: st.info("💡 Cliquer-glisser pour tourner, molette pour zoomer."); render_3d_structure(ss.pdb_data, style=view_style, color_scheme=color_scheme, highlight_res=highlight_res)
 
     # ---------------- TAB 12 : Alignement ----------------
     with tabs[12]:
-        st.subheader("🧬 Illustration allélique autour d'un SNP")
-        if not HAS_BIO: st.error("⚠️ Biopython requis : `pip install biopython`")
+        # DEMO_EXT_BLOCK
+        if DEMO:
+            st.info("🧬 L'alignement allélique interroge Ensembl : disponible avec vos vraies données dans la version complète.")
         else:
-            cand = [("pair_res_group", ss.get("pair_res_group")), ("pair_res_race", ss.get("pair_res_race")), ("gwas_res", ss.get("gwas_res"))]
-            snps_to_align = next((d.head(10) for _, d in cand if d is not None and len(d)), None)
-            if snps_to_align is not None:
-                st.caption("Séquence de référence Ensembl avec substitution allélique (illustration).")
-                snp_to_choose = st.selectbox("SNP à visualiser :", snps_to_align["SNP"].tolist())
-                if st.button("🔍 Générer l'alignement", type="primary", key="aln_btn"):
-                    snp_info = snps_to_align[snps_to_align["SNP"] == snp_to_choose].iloc[0]; chrom = str(snp_info["CHR"]); bp = int(snp_info["BP"]); start = max(1, bp - 25); end = bp + 25
-                    with st.spinner(f"Téléchargement CHR{chrom}:{start}-{end}..."): seq_ref = fetch_ensembl_sequence(chrom, start, end, VEP_SPECIES)
-                    if seq_ref and len(seq_ref) > bp - start:
-                        pos = bp - start; ref_b = seq_ref[pos]; row = ss.snp_filt[ss.snp_filt["SNP"].astype(str) == str(snp_to_choose)]
-                        al = [a for a in ((str(row.iloc[0].get("A1", ".")), str(row.iloc[0].get("A2", "."))) if not row.empty else ()) if a in ("A", "C", "G", "T") and a != ref_b]
-                        alt_b = al[0] if al else ("A" if ref_b != "A" else "G"); sa = list(seq_ref); sa[pos] = alt_b
-                        st.markdown(align_and_highlight(seq_ref, "".join(sa), seq_ref, f"Allèle {alt_b}", f"Allèle {ref_b}"), unsafe_allow_html=True)
-                    else: st.error("❌ Ensembl n'a pas retourné la séquence.")
-            else: st.warning("⚠️ Lancez d'abord un GWAS ou une analyse Groupe/Race.")
+            st.subheader("🧬 Illustration allélique autour d'un SNP")
+            if not HAS_BIO: st.error("⚠️ Biopython requis : `pip install biopython`")
+            else:
+                cand = [("pair_res_group", ss.get("pair_res_group")), ("pair_res_race", ss.get("pair_res_race")), ("gwas_res", ss.get("gwas_res"))]
+                snps_to_align = next((d.head(10) for _, d in cand if d is not None and len(d)), None)
+                if snps_to_align is not None:
+                    st.caption("Séquence de référence Ensembl avec substitution allélique (illustration).")
+                    snp_to_choose = st.selectbox("SNP à visualiser :", snps_to_align["SNP"].tolist())
+                    if st.button("🔍 Générer l'alignement", type="primary", key="aln_btn"):
+                        snp_info = snps_to_align[snps_to_align["SNP"] == snp_to_choose].iloc[0]; chrom = str(snp_info["CHR"]); bp = int(snp_info["BP"]); start = max(1, bp - 25); end = bp + 25
+                        with st.spinner(f"Téléchargement CHR{chrom}:{start}-{end}..."): seq_ref = fetch_ensembl_sequence(chrom, start, end, VEP_SPECIES)
+                        if seq_ref and len(seq_ref) > bp - start:
+                            pos = bp - start; ref_b = seq_ref[pos]; row = ss.snp_filt[ss.snp_filt["SNP"].astype(str) == str(snp_to_choose)]
+                            al = [a for a in ((str(row.iloc[0].get("A1", ".")), str(row.iloc[0].get("A2", "."))) if not row.empty else ()) if a in ("A", "C", "G", "T") and a != ref_b]
+                            alt_b = al[0] if al else ("A" if ref_b != "A" else "G"); sa = list(seq_ref); sa[pos] = alt_b
+                            st.markdown(align_and_highlight(seq_ref, "".join(sa), seq_ref, f"Allèle {alt_b}", f"Allèle {ref_b}"), unsafe_allow_html=True)
+                        else: st.error("❌ Ensembl n'a pas retourné la séquence.")
+                else: st.warning("⚠️ Lancez d'abord un GWAS ou une analyse Groupe/Race.")
 
     # ---------------- TAB 13 : Export ----------------
     with tabs[13]:
@@ -2190,39 +2202,43 @@ def main():
             if ss.meta_res is not None:
                 fish = ss.meta_res; st.success(f"✅ {len(fish)} SNPs combinés"); st.dataframe(fish.head(30), width='stretch')
                 st.plotly_chart(px.scatter(fish, x="P_race", y="P_group", hover_data=["SNP"], log_x=True, log_y=True, title="P_race vs P_group"), width='stretch', key="fisher_scatter"); st.download_button("⬇ CSV", fish.to_csv(index=False).encode(), "meta_analysis.csv", "text/csv")
-        st.divider(); st.markdown("## 3️⃣ Enrichissement fonctionnel"); sources_genes = []
-        if ss.get("sel_ann_race") is not None: sources_genes.append("Gènes SNPs Race")
-        if ss.get("sel_ann_group") is not None: sources_genes.append("Gènes SNPs Groupe")
-        if ss.get("sel_ann") is not None: sources_genes.append("Gènes annotés (sel_ann)")
-        if ss.get("vep_res") is not None: sources_genes.append("Gènes VEP")
-        sources_genes.append("Liste manuelle")
-        c1, c2 = st.columns(2); src_g = c1.selectbox("Source gènes", sources_genes, key="enr_src"); outdir = c2.text_input("Dossier sortie", "", key="enr_outdir"); gmt_file = st.file_uploader("GMT (optionnel)", type=["gmt"], key="enr_gmt"); gene_sets = None
-        if gmt_file is not None: gene_sets = parse_gmt(gmt_file.getvalue()); st.success(f"✅ {len(gene_sets)} gene sets")
-        genes_to_enrich = None; src_df = {"Gènes SNPs Race": ss.get("sel_ann_race"), "Gènes SNPs Groupe": ss.get("sel_ann_group"), "Gènes annotés (sel_ann)": ss.get("sel_ann"), "Gènes VEP": ss.get("vep_res")}.get(src_g)
-        if src_g == "Liste manuelle":
-            txt = st.text_area("Liste de gènes (1/ligne)", key="enr_manual")
-            if txt.strip(): genes_to_enrich = [g.strip() for g in txt.splitlines() if g.strip()]
-        elif src_df is not None and "GENE" in src_df.columns: genes_to_enrich = src_df["GENE"].dropna().unique().tolist()
-        if genes_to_enrich: genes_to_enrich = [g for g in genes_to_enrich if str(g).strip() not in ("N/A", "Intergenic/Non-codant", "Région régulatrice", "Unknown", "nan", "")]
-        if genes_to_enrich and st.button("🔬 Enrichissement", type="primary", key="enr_btn"):
-            with st.spinner("Enrichissement (orthologues humains)..."): ss.enr_res = run_enrichment(genes_to_enrich, gene_sets=gene_sets, organism="Human", outdir=outdir or None)
-        if ss.enr_res is not None:
-            if ss.enr_res.empty: st.warning("Aucun terme enrichi (≥ 3 gènes requis).")
-            else: st.success(f"✅ {len(ss.enr_res)} termes"); st.dataframe(ss.enr_res.head(30), width='stretch'); st.download_button("⬇ CSV", ss.enr_res.to_csv(index=False).encode(), "enrichment.csv", "text/csv")
-        st.divider(); st.markdown("## 4️⃣ Réseau STRING"); genes_string = []
-        if ss.get("sel_ann") is not None and "GENE" in ss.sel_ann.columns: genes_string = ss.sel_ann["GENE"].dropna().unique().tolist()
-        st.info(f"Gènes disponibles : {len(genes_string)}"); c1, c2 = st.columns(2); score_str = c1.selectbox("Score STRING", [150, 400, 700, 900], index=1, key="string_score"); max_genes = c2.slider("Nb max", 5, 100, 30, key="string_max")
-        if st.button("🕸️ Réseau STRING", type="primary", key="string_btn"):
-            if len(genes_string) < 2: st.warning("Il faut ≥ 2 gènes.")
-            else:
-                with st.spinner("STRING..."): ss.string_res = query_string_network(genes_string[:max_genes], species=TAXON, required_score=int(score_str))
-        if ss.string_res is not None:
-            edges, nodes = ss.string_res
-            if edges.empty: st.warning("Aucune interaction (espèce absente de STRING ?).")
-            else:
-                st.success(f"✅ {len(edges)} interactions"); fig = plot_string_network(edges, nodes)
-                if fig: st.plotly_chart(fig, width='stretch', key="string_network_plot")
-                st.dataframe(edges, width='stretch'); st.download_button("⬇ CSV", edges.to_csv(index=False).encode(), "string_network.csv", "text/csv")
+        # DEMO_EXT_BLOCK
+        if DEMO:
+            st.info("🌐 Enrichissement fonctionnel et réseau STRING (services externes) : disponibles dans la version complète.")
+        else:
+            st.divider(); st.markdown("## 3️⃣ Enrichissement fonctionnel"); sources_genes = []
+            if ss.get("sel_ann_race") is not None: sources_genes.append("Gènes SNPs Race")
+            if ss.get("sel_ann_group") is not None: sources_genes.append("Gènes SNPs Groupe")
+            if ss.get("sel_ann") is not None: sources_genes.append("Gènes annotés (sel_ann)")
+            if ss.get("vep_res") is not None: sources_genes.append("Gènes VEP")
+            sources_genes.append("Liste manuelle")
+            c1, c2 = st.columns(2); src_g = c1.selectbox("Source gènes", sources_genes, key="enr_src"); outdir = c2.text_input("Dossier sortie", "", key="enr_outdir"); gmt_file = st.file_uploader("GMT (optionnel)", type=["gmt"], key="enr_gmt"); gene_sets = None
+            if gmt_file is not None: gene_sets = parse_gmt(gmt_file.getvalue()); st.success(f"✅ {len(gene_sets)} gene sets")
+            genes_to_enrich = None; src_df = {"Gènes SNPs Race": ss.get("sel_ann_race"), "Gènes SNPs Groupe": ss.get("sel_ann_group"), "Gènes annotés (sel_ann)": ss.get("sel_ann"), "Gènes VEP": ss.get("vep_res")}.get(src_g)
+            if src_g == "Liste manuelle":
+                txt = st.text_area("Liste de gènes (1/ligne)", key="enr_manual")
+                if txt.strip(): genes_to_enrich = [g.strip() for g in txt.splitlines() if g.strip()]
+            elif src_df is not None and "GENE" in src_df.columns: genes_to_enrich = src_df["GENE"].dropna().unique().tolist()
+            if genes_to_enrich: genes_to_enrich = [g for g in genes_to_enrich if str(g).strip() not in ("N/A", "Intergenic/Non-codant", "Région régulatrice", "Unknown", "nan", "")]
+            if genes_to_enrich and st.button("🔬 Enrichissement", type="primary", key="enr_btn"):
+                with st.spinner("Enrichissement (orthologues humains)..."): ss.enr_res = run_enrichment(genes_to_enrich, gene_sets=gene_sets, organism="Human", outdir=outdir or None)
+            if ss.enr_res is not None:
+                if ss.enr_res.empty: st.warning("Aucun terme enrichi (≥ 3 gènes requis).")
+                else: st.success(f"✅ {len(ss.enr_res)} termes"); st.dataframe(ss.enr_res.head(30), width='stretch'); st.download_button("⬇ CSV", ss.enr_res.to_csv(index=False).encode(), "enrichment.csv", "text/csv")
+            st.divider(); st.markdown("## 4️⃣ Réseau STRING"); genes_string = []
+            if ss.get("sel_ann") is not None and "GENE" in ss.sel_ann.columns: genes_string = ss.sel_ann["GENE"].dropna().unique().tolist()
+            st.info(f"Gènes disponibles : {len(genes_string)}"); c1, c2 = st.columns(2); score_str = c1.selectbox("Score STRING", [150, 400, 700, 900], index=1, key="string_score"); max_genes = c2.slider("Nb max", 5, 100, 30, key="string_max")
+            if st.button("🕸️ Réseau STRING", type="primary", key="string_btn"):
+                if len(genes_string) < 2: st.warning("Il faut ≥ 2 gènes.")
+                else:
+                    with st.spinner("STRING..."): ss.string_res = query_string_network(genes_string[:max_genes], species=TAXON, required_score=int(score_str))
+            if ss.string_res is not None:
+                edges, nodes = ss.string_res
+                if edges.empty: st.warning("Aucune interaction (espèce absente de STRING ?).")
+                else:
+                    st.success(f"✅ {len(edges)} interactions"); fig = plot_string_network(edges, nodes)
+                    if fig: st.plotly_chart(fig, width='stretch', key="string_network_plot")
+                    st.dataframe(edges, width='stretch'); st.download_button("⬇ CSV", edges.to_csv(index=False).encode(), "string_network.csv", "text/csv")
 
     # ---------------- TAB 15 : ML (Random Forest) ----------------
     with tabs[15]:
@@ -2260,18 +2276,22 @@ def main():
 
     # ---------------- TAB 17 : Orthologue ----------------
     with tabs[17]:
-        st.subheader("🌍 Gène chevauchant → orthologue humain (Ensembl Compara)")
-        if ss.get("snp_filt") is not None:
-            su = ss.snp_pruned if ss.snp_pruned is not None else ss.snp_filt; target_snp = st.selectbox("SNP à convertir", su["SNP"].tolist(), key="lift_snp")
-            if st.button("🔄 Chercher", type="primary", key="lift_btn"):
-                row = su[su["SNP"] == target_snp].iloc[0]
-                with st.spinner(f"Recherche pour {row['CHR']}:{int(row['BP'])}..."): ss.lift_res = ortholog_lookup(str(row["CHR"]), int(row["BP"]), VEP_SPECIES)
-                if ss.lift_res is None: st.error("❌ Aucun gène (±50 kb) ou erreur réseau.")
-            res = ss.get("lift_res")
-            if res:
-                if not res.get("human_gene"): st.warning(f"Gène {res['gene_src']} trouvé, mais sans orthologue humain.")
-                else: st.success(f"✅ {res['gene_src']} → **{res['human_gene']}** (humain, chr{res['chr']}:{res['start']}-{res['end']}, {res.get('assembly', '')}, identité {res.get('perc_id', 'N/A')} %)"); st.info("💡 Interroger le GWAS Catalog pour ce gène humain.")
-        else: st.warning("Chargez des données.")
+        # DEMO_EXT_BLOCK
+        if DEMO:
+            st.info("🌍 La recherche d'orthologues humains (Ensembl Compara) est disponible avec vos vraies données dans la version complète.")
+        else:
+            st.subheader("🌍 Gène chevauchant → orthologue humain (Ensembl Compara)")
+            if ss.get("snp_filt") is not None:
+                su = ss.snp_pruned if ss.snp_pruned is not None else ss.snp_filt; target_snp = st.selectbox("SNP à convertir", su["SNP"].tolist(), key="lift_snp")
+                if st.button("🔄 Chercher", type="primary", key="lift_btn"):
+                    row = su[su["SNP"] == target_snp].iloc[0]
+                    with st.spinner(f"Recherche pour {row['CHR']}:{int(row['BP'])}..."): ss.lift_res = ortholog_lookup(str(row["CHR"]), int(row["BP"]), VEP_SPECIES)
+                    if ss.lift_res is None: st.error("❌ Aucun gène (±50 kb) ou erreur réseau.")
+                res = ss.get("lift_res")
+                if res:
+                    if not res.get("human_gene"): st.warning(f"Gène {res['gene_src']} trouvé, mais sans orthologue humain.")
+                    else: st.success(f"✅ {res['gene_src']} → **{res['human_gene']}** (humain, chr{res['chr']}:{res['start']}-{res['end']}, {res.get('assembly', '')}, identité {res.get('perc_id', 'N/A')} %)"); st.info("💡 Interroger le GWAS Catalog pour ce gène humain.")
+            else: st.warning("Chargez des données.")
 
     # ---------------- TAB 18 : Stats publication ----------------
     with tabs[18]:
