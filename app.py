@@ -38,6 +38,12 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 st.set_page_config(page_title="🧬 Helixa | Analyses Génomiques", page_icon="🧬",
                    layout="wide", initial_sidebar_state="expanded")
 
+# ============================================================
+# MODE DÉMO (activé par ?demo=1 : données simulées préchargées, sans upload)
+# ============================================================
+DEMO = str(st.query_params.get("demo", "")) == "1"
+SITE_URL = "https://helixa.rahim-slimane.workers.dev/#contact"
+
 # --- DESIGN HELIXA (Deep Space Theme - Force Brute) ---
 st.markdown("""
 <style>
@@ -1231,6 +1237,30 @@ def annotate_genes(snp_df, gff, wk=50):
             res.append({"SNP": s.get("SNP", f"{ch}:{pos}"), "CHR": ch, "SNP_POS": pos, "GENE": g["GENE"], "GENE_START": g["START"], "GENE_END": g["END"], "DIST_KB": round(d / 1000.0, 2)})
     return pd.DataFrame(res)
 
+def annotate_genes_cm(snp_df, map_df, gff, window_cm=10, window_kb_fallback=100):
+    """Annotation des gènes dans une fenêtre génétique (cM) autour de chaque SNP.
+    Repli automatique en kb sur les chromosomes dont la carte génétique est absente (cM constants / nuls)."""
+    if gff is None or gff.empty or snp_df is None or len(snp_df) == 0 or map_df is None: return pd.DataFrame()
+    gff_chr = gff["CHR"].astype(str).values; map_chr = map_df["CHR"].astype(str).values; res = []
+    for _, s in snp_df.iterrows():
+        ch = str(s["CHR"]); pos = int(s.get("BP", s.get("START", 0)))
+        ng = gff[gff_chr == ch]
+        if ng.empty: continue
+        m = map_df[map_chr == ch].sort_values("BP"); bp_arr = m["BP"].astype(float).values; cm_arr = m["CM"].astype(float).values
+        gs = ng["START"].astype(float).values; ge = ng["END"].astype(float).values
+        has_cm = len(m) >= 2 and float(np.ptp(cm_arr)) > 0
+        if has_cm:
+            snp_cm = float(np.interp(pos, bp_arr, cm_arr)); gs_cm = np.interp(gs, bp_arr, cm_arr); ge_cm = np.interp(ge, bp_arr, cm_arr)
+            d_cm = np.where((gs_cm <= snp_cm) & (snp_cm <= ge_cm), 0.0, np.minimum(np.abs(gs_cm - snp_cm), np.abs(ge_cm - snp_cm)))
+            keep = d_cm <= window_cm; window = f"±{window_cm} cM"
+        else:
+            d_cm = np.full(len(ng), np.nan); keep = (gs <= pos + window_kb_fallback * 1000) & (ge >= pos - window_kb_fallback * 1000); window = f"±{window_kb_fallback} kb (repli : pas de carte cM)"
+        d_bp = np.where((gs <= pos) & (pos <= ge), 0.0, np.minimum(np.abs(gs - pos), np.abs(ge - pos)))
+        for k in np.where(keep)[0]:
+            res.append({"SNP": s.get("SNP", f"{ch}:{pos}"), "CHR": ch, "SNP_POS_BP": pos, "GENE": ng["GENE"].iloc[k], "GENE_START": int(gs[k]), "GENE_END": int(ge[k]),
+                        "DIST_KB": round(float(d_bp[k]) / 1000.0, 2), "DIST_CM": None if np.isnan(d_cm[k]) else round(float(d_cm[k]), 3), "WINDOW": window})
+    return pd.DataFrame(res)
+
 def run_enrichment(gene_list, gene_sets=None, organism="Human", outdir=None):
     try:
         import gseapy as gp
@@ -1589,7 +1619,7 @@ def main():
         elif ss.current_species != species_choice:
             ss.current_species = species_choice; reset_derived(keep=()); st.warning(f"🔄 Espèce changée pour {species_choice}. Données réinitialisées.")
 
-        st.header("📁 Données"); mode = st.radio("Source", ["Demo", "PED/MAP", "VCF", "Axiom→PED"], key="src")
+        st.header("📁 Données"); mode = "Demo" if DEMO else st.radio("Source", ["Demo", "PED/MAP", "VCF", "Axiom→PED"], key="src")
         if mode == "Demo":
             if st.button("🎲 Générer démo", width='stretch'):
                 gt, i, s = gen_demo(autosomes=AUTO, ars=ARS); reset_derived(keep=()); ss.update({"gt": gt, "ind_df": rec_fid(i), "snp_df": s}); st.success("✅ Démo générée")
@@ -1684,9 +1714,25 @@ def main():
         hwe_pop = st.checkbox("HWE par population (recommandé)", value=True); hwe_k = st.slider("Exclure si HWE rejeté dans ≥ k populations", 1, 10, 2) if hwe_pop else 1
         ld_r2 = st.slider("LD r²", 0.05, 0.5, 0.2, 0.05); ld_w = st.slider("LD fenêtre (SNPs)", 20, 200, 50, 10)
 
+    if DEMO and ss.gt is None:
+        try:
+            with st.spinner("Préparation de la démo..."):
+                gt_d, ind_d, snp_d = gen_demo(autosomes=AUTO, ars=ARS)
+                ind_d = rec_fid(ind_d)
+                ss.update({"gt": gt_d, "ind_df": ind_d, "snp_df": snp_d})
+                p_d = {"geno": geno, "mind": mind, "maf": maf_t, "hwe": hwe_t, "het_sd": het_sd, "hwe_pop": hwe_pop, "hwe_k": hwe_k}
+                gf_d, inf_d, snf_d, qs_d = apply_qc(gt_d, ind_d, snp_d, p_d, AUTO, keep_autosomes=keep_auto, rem_out=rem_out)
+                ss.update({"gt_filt": gf_d, "ind_filt": inf_d, "snp_filt": snf_d, "qc_stats": qs_d})
+        except Exception as e:
+            st.error(f"❌ Démo indisponible : {e}")
+
     if ss.gt is None: st.info(f"👉 Chargez des données pour {species_choice} (Demo recommandé)."); return
 
     st.title(f"🐾 {species_choice} Genomics Pipeline v23.7")
+
+    if DEMO:
+        st.info("🧪 Mode démo : données simulées préchargées (QC déjà appliqué). Explorez les onglets — aucune donnée personnelle n'est utilisée.")
+        st.markdown("<a href='" + SITE_URL + "' target='_top' style='color:#37d7f2;font-weight:700'>Demander l'analyse complète sur vos données →</a>", unsafe_allow_html=True)
     tabs = st.tabs(["🧹 QC", "✂️ LD", "🧬 Structure", "🎨 Admixture", "📈 Démographie", "🔍 Sélection",
                 "🧪 GWAS Classique", "🎯 Post-GWAS", "📈 GBLUP", "🧬 Annotation", "🧬 VEP & NCBI",
                 "🧬 Structure 3D", "🧬 Alignement", "📤 Export", "🔬 Méta-analyse", "🧠 ML",
@@ -2102,7 +2148,8 @@ def main():
 
     # ---------------- TAB 13 : Export ----------------
     with tabs[13]:
-        if ss.gt_filt is None: st.info(NEED_QC)
+        if DEMO: st.info("📤 Export désactivé en mode démo — demandez l'analyse complète pour récupérer vos fichiers.")
+        elif ss.gt_filt is None: st.info(NEED_QC)
         else:
             gu, su, iu = work_data()
             if st.button("📦 Préparer PLINK", key="pl_btn"):
@@ -2311,7 +2358,8 @@ def main():
     with tabs[19]:
         st.subheader("📝 Générateur de Brouillon d'Article Scientifique (IMRAD)")
         st.info("Ce module assemble vos résultats. Vous pouvez soit générer la base automatique, soit demander à l'IA de rédiger la Discussion.")
-        if ss.gt_filt is None: st.error("⚠️ Vous devez d'abord charger les données et lancer le QC.")
+        if DEMO: st.info("📝 Module de rédaction réservé à la version complète.")
+        elif ss.gt_filt is None: st.error("⚠️ Vous devez d'abord charger les données et lancer le QC.")
         else:
             if st.button("📄 1. Générer le brouillon de base (Markdown)", type="primary"):
                 article = []
