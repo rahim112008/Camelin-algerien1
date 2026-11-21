@@ -1,4 +1,6 @@
-"""🧬 Universal Livestock Genomics Pipeline v23.7 (Bovin & Camelin) — stats pour publication"""
+"""🧬 Universal Livestock Genomics Pipeline v23.8 (Bovin & Camelin) — stats pour publication
+v23.8 : ajout Shannon-Weaver, plot N_e enrichi, SNP Map (karyoplot), LD auto par onglet.
+"""
 import gzip, io, warnings, zipfile, gc, hashlib, json, time
 from collections import Counter
 from io import BytesIO
@@ -31,12 +33,9 @@ except ImportError:
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-st.set_page_config(page_title="🧬 Universal Genomics v23.7", page_icon="🧬",
+st.set_page_config(page_title="🧬 Universal Genomics v23.8", page_icon="🧬",
                    layout="wide", initial_sidebar_state="expanded")
 
-# ============================================================
-# CONFIGURATION DES ESPÈCES
-# ============================================================
 SPECIES_CONFIG = {
     "Camelin (Dromadaire)": {
         "taxon": "9838", "vep_species": "camelus_dromedarius", "prefix": "camel",
@@ -66,9 +65,6 @@ def apply_group_mapping(ind_df, group_map, default="AUTRE"):
     df["FID_GROUPE"] = df["FID"].map(group_map).fillna(default)
     return df
 
-# ============================================================
-# UTILS & CACHE
-# ============================================================
 def _ha(x):
     if not isinstance(x, np.ndarray) or x.size == 0: return "empty"
     if x.dtype.kind in ("U", "S", "O"):
@@ -138,103 +134,58 @@ def _sample_blocks(n, max_snp, block=200, seed=42):
     ch = np.sort(np.random.default_rng(seed).choice(nb, size=min(k, nb), replace=False))
     return np.concatenate([np.arange(b * block, min((b + 1) * block, n)) for b in ch])
 
-# ============================================================
-# DIAGNOSTIC & AUTO-DÉTECTION DES FICHIERS BRUTS (NOUVEAU)
-# ============================================================
 def _split_line(line):
-    """Découpe une ligne quel que soit le séparateur (tab, comma, espaces)."""
-    if "\t" in line:
-        return [x.strip() for x in line.split("\t") if x.strip()]
-    if "," in line and line.count(",") > line.count(" "):
-        return [x.strip() for x in line.split(",") if x.strip()]
+    if "\t" in line: return [x.strip() for x in line.split("\t") if x.strip()]
+    if "," in line and line.count(",") > line.count(" "): return [x.strip() for x in line.split(",") if x.strip()]
     return line.split()
 
 def diagnose_ped(raw_bytes, fn=""):
-    """Analyse la structure d'un PED sans tout charger (sur 20 lignes échantillonnées)."""
     try:
-        text = _rt(raw_bytes)
-        lines = [l for l in text.splitlines() if l.strip()]
-        if not lines:
-            return {"error": "Fichier vide"}
-        sample = lines[:20]
-        first = _split_line(sample[0])
-        is_header = False
+        text = _rt(raw_bytes); lines = [l for l in text.splitlines() if l.strip()]
+        if not lines: return {"error": "Fichier vide"}
+        sample = lines[:20]; first = _split_line(sample[0]); is_header = False
         if first:
             f0 = first[0].lower()
-            if f0 in ("fid", "sample", "sample_id", "sampleid", "iid", "animal", "id", "family", "individual"):
-                is_header = True
+            if f0 in ("fid", "sample", "sample_id", "sampleid", "iid", "animal", "id", "family", "individual"): is_header = True
         data_lines = lines[1:] if is_header else lines
-        data_first = _split_line(data_lines[0])
-        is_plink = False
+        data_first = _split_line(data_lines[0]); is_plink = False
         if len(data_first) >= 6:
-            try:
-                int(data_first[2]); int(data_first[3]); int(data_first[4])
-                is_plink = True
-            except (ValueError, IndexError):
-                pass
+            try: int(data_first[2]); int(data_first[3]); int(data_first[4]); is_plink = True
+            except (ValueError, IndexError): pass
         start = 6 if is_plink else 1
         n_snp = (len(data_first) - start) // 2
-        if n_snp < 1:
-            return {"error": f"Impossible d'extraire des génotypes : {len(data_first)} colonnes"}
+        if n_snp < 1: return {"error": f"Impossible d'extraire des génotypes : {len(data_first)} colonnes"}
         sep = ("tab" if "\t" in sample[0] else "comma" if "," in sample[0] else "space")
-        return {
-            "format": "PLINK standard" if is_plink else "non-standard (IID + génotypes)",
-            "n_individuals": len(data_lines),
-            "n_snps": n_snp,
-            "separator": sep,
-            "has_header": is_header,
-            "first_id": data_first[1] if is_plink and len(data_first) > 1 else data_first[0],
-            "first_genotypes": data_first[start:start + 6],
-        }
-    except Exception as e:
-        return {"error": f"{type(e).__name__}: {e}"}
+        return {"format": "PLINK standard" if is_plink else "non-standard (IID + génotypes)",
+                "n_individuals": len(data_lines), "n_snps": n_snp, "separator": sep, "has_header": is_header,
+                "first_id": data_first[1] if is_plink and len(data_first) > 1 else data_first[0],
+                "first_genotypes": data_first[start:start + 6]}
+    except Exception as e: return {"error": f"{type(e).__name__}: {e}"}
 
 def diagnose_map(raw_bytes, fn=""):
-    """Analyse la structure d'un MAP (sur 20 lignes échantillonnées)."""
     try:
-        text = _rt(raw_bytes)
-        lines = [l for l in text.splitlines() if l.strip()]
-        if not lines:
-            return {"error": "Fichier vide"}
-        sample = lines[:20]
-        first = _split_line(sample[0])
-        is_header = False
+        text = _rt(raw_bytes); lines = [l for l in text.splitlines() if l.strip()]
+        if not lines: return {"error": "Fichier vide"}
+        sample = lines[:20]; first = _split_line(sample[0]); is_header = False
         if first:
             f0 = first[0].lower().lstrip("#")
-            if f0 in ("chr", "chrom", "chromosome", "snp", "marker", "id"):
-                is_header = True
+            if f0 in ("chr", "chrom", "chromosome", "snp", "marker", "id"): is_header = True
         data_lines = lines[1:] if is_header else lines
-        data_first = _split_line(data_lines[0])
-        is_standard = False
+        data_first = _split_line(data_lines[0]); is_standard = False
         if len(data_first) >= 4:
-            try:
-                float(data_first[2]); int(float(data_first[3]))
-                is_standard = True
-            except (ValueError, IndexError):
-                pass
+            try: float(data_first[2]); int(float(data_first[3])); is_standard = True
+            except (ValueError, IndexError): pass
         sep = ("tab" if "\t" in sample[0] else "comma" if "," in sample[0] else "space")
-        return {
-            "format": "PLINK standard (CHR SNP CM BP)" if is_standard else "variante",
-            "n_lines_data": len(data_lines),
-            "n_columns": len(data_first),
-            "separator": sep,
-            "has_header": is_header,
-            "first_line_tokens": data_first[:6],
-        }
-    except Exception as e:
-        return {"error": f"{type(e).__name__}: {e}"}
+        return {"format": "PLINK standard (CHR SNP CM BP)" if is_standard else "variante",
+                "n_lines_data": len(data_lines), "n_columns": len(data_first), "separator": sep,
+                "has_header": is_header, "first_line_tokens": data_first[:6]}
+    except Exception as e: return {"error": f"{type(e).__name__}: {e}"}
 
 def preview_lines(raw_bytes, n=4):
-    """Retourne les N premières lignes (pour aperçu dans l'UI)."""
     try:
-        text = _rt(raw_bytes)
-        return [l for l in text.splitlines() if l.strip()][:n]
-    except Exception as e:
-        return [f"❌ {e}"]
+        text = _rt(raw_bytes); return [l for l in text.splitlines() if l.strip()][:n]
+    except Exception as e: return [f"❌ {e}"]
 
-# ============================================================
-# PARSERS
-# ============================================================
 def parse_axiom(raw_bytes, fn=""):
     raw = gzip.decompress(raw_bytes) if fn.endswith(".gz") or raw_bytes[:2] == b"\x1f\x8b" else raw_bytes
     lines = [l.rstrip("\r\n") for l in raw.decode("utf-8", errors="replace").splitlines() if l.strip()]
@@ -256,132 +207,78 @@ def parse_axiom(raw_bytes, fn=""):
     for i, r in enumerate(gtypes): gtypes[i] = r[:c] + [("0", "0")] * (c - len(r))
     return samples, gtypes, c
 
-# ✅ NOUVEAU : parse_map universel (multi-format)
 def parse_map(b):
-    """Parseur MAP universel : gère PLINK standard, 3 colonnes, colonnes inversées, en-tête, séparateurs variés."""
-    text = _rt(b)
-    rows = []
+    text = _rt(b); rows = []
     for line in text.splitlines():
-        if not line.strip() or line.startswith("#"):
-            continue
+        if not line.strip() or line.startswith("#"): continue
         p = _split_line(line)
-        if not p:
-            continue
-        if p[0].lower().lstrip("#") in ("chr", "chrom", "chromosome", "snp", "marker", "id"):
-            continue
-        # Cas 1 : CHR SNP CM BP
+        if not p: continue
+        if p[0].lower().lstrip("#") in ("chr", "chrom", "chromosome", "snp", "marker", "id"): continue
         if len(p) >= 4:
             try:
                 cm = float(p[2]) if p[2] not in ("0", ".", "NA", "") else 0.0
-                bp = int(float(p[3]))
-                rows.append({"CHR": str(p[0]), "SNP": p[1], "CM": cm, "BP": bp})
-                continue
-            except (ValueError, IndexError):
-                pass
-        # Cas 2 : CHR SNP BP (3 colonnes)
+                bp = int(float(p[3])); rows.append({"CHR": str(p[0]), "SNP": p[1], "CM": cm, "BP": bp}); continue
+            except (ValueError, IndexError): pass
         if len(p) == 3:
             try:
-                bp = int(float(p[2]))
-                rows.append({"CHR": str(p[0]), "SNP": p[1], "CM": 0.0, "BP": bp})
-                continue
-            except (ValueError, IndexError):
-                pass
-        # Cas 3 : SNP CHR BP (inversé)
+                bp = int(float(p[2])); rows.append({"CHR": str(p[0]), "SNP": p[1], "CM": 0.0, "BP": bp}); continue
+            except (ValueError, IndexError): pass
         if len(p) == 3:
             try:
                 bp = int(float(p[2]))
                 if p[1].upper() in {str(i) for i in range(1, 40)} | {"X", "Y", "MT", "M"}:
-                    rows.append({"CHR": str(p[1]), "SNP": p[0], "CM": 0.0, "BP": bp})
-                    continue
-            except (ValueError, IndexError):
-                pass
-        # Cas 4 : 5+ colonnes (Axiom, Illumina)
+                    rows.append({"CHR": str(p[1]), "SNP": p[0], "CM": 0.0, "BP": bp}); continue
+            except (ValueError, IndexError): pass
         if len(p) >= 5:
             try:
-                bp = int(float(p[3]))
-                rows.append({"CHR": str(p[0]), "SNP": p[1], "CM": 0.0, "BP": bp})
-                continue
-            except (ValueError, IndexError):
-                pass
-    if not rows:
-        raise ValueError(".map vide ou format non reconnu")
-    df = pd.DataFrame(rows)
-    df["CHR"] = _norm_chr(df["CHR"])
-    if df["BP"].max() < 10000:
-        df["BP"] = df["BP"] * 1_000_000
+                bp = int(float(p[3])); rows.append({"CHR": str(p[0]), "SNP": p[1], "CM": 0.0, "BP": bp}); continue
+            except (ValueError, IndexError): pass
+    if not rows: raise ValueError(".map vide ou format non reconnu")
+    df = pd.DataFrame(rows); df["CHR"] = _norm_chr(df["CHR"])
+    if df["BP"].max() < 10000: df["BP"] = df["BP"] * 1_000_000
     return df
 
-# ✅ NOUVEAU : parse_ped universel + économe en mémoire (int32)
 def parse_ped(b, n_map=None):
-    """Parseur PED universel : PLINK standard et non-standard, en-tête, lignes courtes, séparateurs, int32."""
-    text = _rt(b)
-    lines = [l for l in text.splitlines() if l.strip()]
-    if not lines:
-        raise ValueError(".ped vide")
+    text = _rt(b); lines = [l for l in text.splitlines() if l.strip()]
+    if not lines: raise ValueError(".ped vide")
     first = _split_line(lines[0])
-    is_header = bool(first) and first[0].lower() in (
-        "fid", "sample", "sample_id", "sampleid", "iid", "animal", "id", "family", "individual")
+    is_header = bool(first) and first[0].lower() in ("fid", "sample", "sample_id", "sampleid", "iid", "animal", "id", "family", "individual")
     if is_header:
         lines = lines[1:]
-        if not lines:
-            raise ValueError(".ped vide après en-tête")
-    first_data = _split_line(lines[0])
-    is_plink = False
+        if not lines: raise ValueError(".ped vide après en-tête")
+    first_data = _split_line(lines[0]); is_plink = False
     if len(first_data) >= 6:
-        try:
-            int(first_data[2]); int(first_data[3]); int(first_data[4])
-            is_plink = True
-        except (ValueError, IndexError):
-            pass
+        try: int(first_data[2]); int(first_data[3]); int(first_data[4]); is_plink = True
+        except (ValueError, IndexError): pass
     if is_plink:
-        n_ped = (len(first_data) - 6) // 2
-        start_idx, id_idx, fid_col = 6, 1, 0
+        n_ped = (len(first_data) - 6) // 2; start_idx, id_idx, fid_col = 6, 1, 0
     else:
-        n_ped = (len(first_data) - 1) // 2
-        start_idx, id_idx, fid_col = 1, 0, None
-    if n_ped < 1:
-        raise ValueError(f"Impossible d'extraire des génotypes : {len(first_data)} colonnes trouvées")
-    n = n_ped if n_map is None else min(n_map, n_ped)
-    ec = start_idx + 2 * n
-    fids, iids = [], []
-    allele_to_idx = {}
-    gt_rows = []
+        n_ped = (len(first_data) - 1) // 2; start_idx, id_idx, fid_col = 1, 0, None
+    if n_ped < 1: raise ValueError(f"Impossible d'extraire des génotypes : {len(first_data)} colonnes trouvées")
+    n = n_ped if n_map is None else min(n_map, n_ped); ec = start_idx + 2 * n
+    fids, iids = [], []; allele_to_idx = {}; gt_rows = []
     for line in lines:
         p = _split_line(line)
-        if len(p) < ec:
-            p = p + ["0"] * (ec - len(p))
-        fids.append(p[fid_col] if fid_col is not None else "FAM")
-        iids.append(p[id_idx])
+        if len(p) < ec: p = p + ["0"] * (ec - len(p))
+        fids.append(p[fid_col] if fid_col is not None else "FAM"); iids.append(p[id_idx])
         row = np.full(2 * n, -1, dtype=np.int32)
         for k, a in enumerate(p[start_idx:start_idx + 2 * n]):
             if a not in ("0", ".", "NA", "", "N", "N/N"):
-                if a not in allele_to_idx:
-                    allele_to_idx[a] = len(allele_to_idx)
+                if a not in allele_to_idx: allele_to_idx[a] = len(allele_to_idx)
                 row[k] = allele_to_idx[a]
         gt_rows.append(row)
-    if not iids:
-        raise ValueError("Aucun individu valide trouvé")
-    mat = np.stack(gt_rows)
-    del gt_rows
-    a1, a2 = mat[:, 0::2], mat[:, 1::2]
-    miss = (a1 == -1) | (a2 == -1)
-    ok = ~miss
+    if not iids: raise ValueError("Aucun individu valide trouvé")
+    mat = np.stack(gt_rows); del gt_rows
+    a1, a2 = mat[:, 0::2], mat[:, 1::2]; miss = (a1 == -1) | (a2 == -1); ok = ~miss
     K = len(allele_to_idx)
-    if K == 0:
-        raise ValueError("Aucun allèle valide trouvé dans le PED")
+    if K == 0: raise ValueError("Aucun allèle valide trouvé dans le PED")
     cnt = np.zeros((K, n), dtype=np.int32)
-    for k in range(K):
-        cnt[k] = ((a1 == k) & ok).sum(0) + ((a2 == k) & ok).sum(0)
+    for k in range(K): cnt[k] = ((a1 == k) & ok).sum(0) + ((a2 == k) & ok).sum(0)
     idx_to_allele = {v: k for k, v in allele_to_idx.items()}
-    order = np.argsort(-cnt, axis=0, kind="stable")
-    major = order[0]
-    minor = order[1] if K > 1 else order[0]
-    A1 = np.array([idx_to_allele[major[j]] if cnt[major[j], j] > 0 else "."
-                   for j in range(n)])
-    A2 = np.array([idx_to_allele[minor[j]] if cnt[minor[j], j] > 0 else "."
-                   for j in range(n)])
-    gt = ((a1 == minor[None, :]).astype(np.float32) +
-          (a2 == minor[None, :]).astype(np.float32))
+    order = np.argsort(-cnt, axis=0, kind="stable"); major = order[0]; minor = order[1] if K > 1 else order[0]
+    A1 = np.array([idx_to_allele[major[j]] if cnt[major[j], j] > 0 else "." for j in range(n)])
+    A2 = np.array([idx_to_allele[minor[j]] if cnt[minor[j], j] > 0 else "." for j in range(n)])
+    gt = ((a1 == minor[None, :]).astype(np.float32) + (a2 == minor[None, :]).astype(np.float32))
     gt[miss] = np.nan
     return gt, pd.DataFrame({"FID": fids, "IID": iids}), A1.tolist(), A2.tolist()
 
@@ -442,8 +339,7 @@ def parse_gff3(b):
     return df.drop_duplicates().reset_index(drop=True)
 
 @st.cache_data(show_spinner=False)
-def load_gff(b):
-    return parse_gff3(b)
+def load_gff(b): return parse_gff3(b)
 
 def parse_gmt(file_bytes):
     text = file_bytes.decode("utf-8", errors="replace"); sets = {}
@@ -469,8 +365,7 @@ def match_pheno(ind_df, pheno_df, mapping_df=None):
         p[id_c] = p[id_c].astype(str); map_a = next((c for c in m.columns if c != "IID"), None)
         if map_a is None or "IID" not in m.columns: raise ValueError("Le mapping doit contenir IID + une colonne d'identifiant.")
         m[map_a] = m[map_a].astype(str); m["IID"] = m["IID"].astype(str)
-        pm = p.merge(m, left_on=id_c, right_on=map_a, how="left"); pm["_k"] = pm["IID"].astype(str)
-        pm = pm.drop_duplicates("_k")
+        pm = p.merge(m, left_on=id_c, right_on=map_a, how="left"); pm["_k"] = pm["IID"].astype(str); pm = pm.drop_duplicates("_k")
         out = ind[["_k", "FID", "IID"]].merge(pm.drop(columns=["IID", "FID"], errors="ignore"), on="_k", how="left")
         return out.drop(columns="_k"), id_c
     id_c = next((c for c in ["IID", "id", "ID", "sample", "Animal", "animal"] if c in pheno_df.columns), None)
@@ -501,12 +396,8 @@ def rec_fid(ind):
     if df["FID"].nunique() <= 1: df["FID"] = df["IID"].astype(str).str.split("_").str[0]
     return df
 
-# ✅ BONUS : nettoyer un PED brut → PLINK standard
 def clean_ped_to_plink(raw_bytes, n_max_snp=None):
-    """Convertit un PED brut (quel format) en PED standard PLINK prêt pour --file."""
-    gt, ind, a1, a2 = parse_ped(raw_bytes, n_max_snp)
-    n, m = gt.shape
-    lines = []
+    gt, ind, a1, a2 = parse_ped(raw_bytes, n_max_snp); n, m = gt.shape; lines = []
     for i in range(n):
         geno = []
         for j in range(m):
@@ -518,9 +409,6 @@ def clean_ped_to_plink(raw_bytes, n_max_snp=None):
         lines.append("\t".join([str(ind.iloc[i]["FID"]), str(ind.iloc[i]["IID"]), "0", "0", "0", "-9"] + geno))
     return "\n".join(lines) + "\n"
 
-# ============================================================
-# QC
-# ============================================================
 def miss_ind(g): return np.isnan(g).mean(axis=1)
 def miss_snp(g): return np.isnan(g).mean(axis=0)
 def maf(g): p = np.nanmean(g, axis=0) / 2.0; return np.minimum(p, 1.0 - p)
@@ -554,6 +442,9 @@ def hwe_pvals(g):
         with np.errstate(invalid="ignore", divide="ignore"):
             eh = 2.0 * p * (1.0 - p) * nv; ok = (eh >= 5) & np.isfinite(eh); chi2 = (np.abs(n1 - eh) - 0.5) ** 2 / eh; pv[ok] = stats.chi2.sf(chi2[ok], df=1)
     return pv
+
+# NOTE v23.8 : hwe_by_pop est défini une seule fois plus bas (version cachée + exacte).
+# L'ancienne version de la Partie 1 a été retirée pour éviter le doublon.
 
 def sync_dims(gt, ind_df, snp_df):
     n = min(gt.shape[0], len(ind_df)); m = min(gt.shape[1], len(snp_df))
@@ -590,9 +481,6 @@ def apply_qc(gt, ind_df, snp_df, params, autosomes, keep_autosomes=True, rem_out
     return gt, ind_df, snp_df, {"n_ind_init": int(n0), "n_snp_init": int(m0), "n_ind_pre": n_pre, "n_ind_final": int(gt.shape[0]), "n_snp_final": int(gt.shape[1]),
                                 "excluded_ind": int(n0 - gt.shape[0]), "excluded_snp": int(m0 - gt.shape[1]), "trace": tr}
 
-# ============================================================
-# ALGORITHMES
-# ============================================================
 def _wc_abc(gt, labels, min_n=2):
     labels = np.asarray(labels).astype(str); pops = np.unique(labels); m = gt.shape[1]
     n = np.zeros((len(pops), m)); p = np.zeros_like(n); h = np.zeros_like(n)
@@ -887,9 +775,6 @@ def midpoint_info(D, labels):
             if D[i, j] > md: md = D[i, j]; im, jm = i, j
     return {"leaf_i": labels[im], "leaf_j": labels[jm], "max_dist": float(md), "midpoint": float(md / 2)}
 
-# ============================================================
-# GWAS
-# ============================================================
 def _logistic_irls(X, y, max_iter=25, tol=1e-6):
     beta = np.zeros(X.shape[1])
     for _ in range(max_iter):
@@ -1047,9 +932,6 @@ def run_gblup(gt, pheno, kf=5, ids=None, seed=42):
     names = np.asarray(ids)[valid] if ids is not None else np.where(valid)[0]
     return pd.DataFrame({"IID": names, "Phenotype": Y, "GEBV": gebv}), {"h2": h2, "corr": corr, "r2": corr ** 2, "rmse": float(np.sqrt(np.mean((Y - yp) ** 2)))}
 
-# ============================================================
-# MÉTA-ANALYSE & API
-# ============================================================
 def _merge_res(res_race, res_group):
     return res_race[["SNP", "CHR", "BP", "P"]].rename(columns={"P": "P_race"}).merge(res_group[["SNP", "P"]].rename(columns={"P": "P_group"}), on="SNP", how="inner")
 
@@ -1289,9 +1171,6 @@ def query_string_network(genes, species, required_score=400):
         return edges, pd.DataFrame({"ID": sorted(set(edges["SOURCE"]).union(set(edges["TARGET"])))})
     except Exception: return pd.DataFrame(), pd.DataFrame()
 
-# ============================================================
-# EXPORTS & GRAPHIQUES
-# ============================================================
 def _alleles_for_export(snp_df, m):
     a_minor = snp_df["A2"].astype(str).values[:m] if "A2" in snp_df.columns else np.array(["G"] * m)
     a_major = snp_df["A1"].astype(str).values[:m] if "A1" in snp_df.columns else np.array(["A"] * m)
@@ -1419,9 +1298,6 @@ def plot_tree(Z, labels, support=None, title="", mid=None):
     if mid: fig.add_vline(x=mid["midpoint"], line_dash="dot", line_color="purple")
     fig.update_layout(title=title, xaxis_title="Distance de Reynolds", yaxis=dict(showticklabels=False, showgrid=False, zeroline=False), height=max(500, n * 35), margin=dict(l=120, r=40, t=80, b=40), plot_bgcolor="white"); return fig
 
-# ============================================================
-# STATISTIQUES POUR PUBLICATION (v23.7)
-# ============================================================
 @cache_data
 def hwe_by_pop(gt, labels, min_n=10):
     labels = np.asarray(labels).astype(str); cols = {}
@@ -1570,9 +1446,189 @@ def mantel_test(A, B, n_perm=999, seed=42):
         if np.corrcoef(a, B[np.ix_(p, p)][iu])[0, 1] >= r: cnt += 1
     return r, (cnt + 1) / (n_perm + 1)
 
-# ============================================================
-# INTERFACE STREAMLIT
-# ============================================================
+# ═══════════════════════════════════════════════════════════════
+# ✨ NOUVELLES FONCTIONS v23.8 — Shannon-Weaver, N_e plot, SNP Map, LD auto
+# ═══════════════════════════════════════════════════════════════
+
+@cache_data
+def shannon_weaver(gt, labels, min_n=3):
+    """Indice de Shannon-Weaver (H') et Pielou (J') par population."""
+    labels = np.asarray(labels).astype(str); rows = []
+    for pop in np.unique(labels):
+        sub = gt[labels == pop]
+        if sub.shape[0] < min_n: continue
+        ok = ~np.isnan(sub); n = ok.sum(0).astype(float)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            p = np.where(n > 0, np.nansum(sub, 0) / (2.0 * n), np.nan)
+        q = 1.0 - p
+        with np.errstate(divide="ignore", invalid="ignore"):
+            h_snp = -(np.where(p > 0, p * np.log(p), 0.0) + np.where(q > 0, q * np.log(q), 0.0))
+            j_snp = np.where(np.isfinite(h_snp), h_snp / np.log(2.0), np.nan)
+        valid = np.isfinite(h_snp)
+        if not valid.any(): continue
+        pv, qv = p[valid], q[valid]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            ne_eff = 1.0 / np.clip(pv**2 + qv**2, 1e-12, 1.0)
+        rows.append({"Population": pop, "N": int(sub.shape[0]),
+                     "Shannon_H": round(float(np.nanmean(h_snp[valid])), 4),
+                     "Shannon_H_SD": round(float(np.nanstd(h_snp[valid])), 4),
+                     "Pielou_J": round(float(np.nanmean(j_snp[valid])), 4),
+                     "Nb_Alleles_Efficaces": round(float(np.nanmean(ne_eff)), 4),
+                     "Nb_SNPs_Polymorphes": int(valid.sum())})
+    return pd.DataFrame(rows)
+
+def plot_shannon_weaver(df):
+    """Graphique barres H' et J' par population."""
+    if df is None or df.empty: return None
+    fig = make_subplots(rows=1, cols=2, subplot_titles=("Shannon-Weaver H' (diversité allélique)", "Pielou J' (équitabilité)"))
+    fig.add_trace(go.Bar(x=df["Population"], y=df["Shannon_H"], error_y=dict(type="data", array=df["Shannon_H_SD"]),
+                         marker_color="teal", text=df["Shannon_H"], textposition="outside", name="H'"), 1, 1)
+    fig.add_trace(go.Bar(x=df["Population"], y=df["Pielou_J"], marker_color="orange", text=df["Pielou_J"],
+                         textposition="outside", name="J'"), 1, 2)
+    fig.add_hline(y=1.0, line_dash="dash", line_color="grey", annotation_text="J' max = 1", row=1, col=2)
+    fig.update_layout(height=520, showlegend=False, title_text="Diversité génétique — Shannon-Weaver & Pielou")
+    return fig
+
+def plot_ne(ne_df, title="Taille efficace historique (N_e)", log_y=True, show_ci=True):
+    """Graphique N_e en fonction des générations passées."""
+    if ne_df is None or ne_df.empty: return None
+    d = ne_df.sort_values("GenAgo").copy(); fig = go.Figure()
+    if show_ci:
+        lo = (d["Ne"] * 0.7).clip(lower=1e-6); hi = d["Ne"] * 1.3
+        fig.add_trace(go.Scatter(x=pd.concat([d["GenAgo"], d["GenAgo"][::-1]]), y=pd.concat([hi, lo[::-1]]),
+                                 fill="toself", fillcolor="rgba(220,20,60,0.15)", line=dict(color="rgba(255,255,255,0)"),
+                                 hoverinfo="skip", showlegend=False))
+    fig.add_trace(go.Scatter(x=d["GenAgo"], y=d["Ne"], mode="lines+markers", line=dict(color="crimson", width=2.5),
+                             marker=dict(size=7, color="crimson", line=dict(width=1, color="white")), name="N_e estimé",
+                             hovertemplate="Générations: %{x:.0f}<br>N_e: %{y:.0f}<extra></extra>"))
+    fig.update_layout(title=title, xaxis_title="Générations dans le passé", yaxis_title="N_e estimé",
+                      yaxis_type="log" if log_y else "linear", height=520, hovermode="x unified")
+    return fig
+
+def plot_snp_map(snp_df, ars, max_snps=2500, highlight_snps=None, density=False, title="Carte des SNPs sur le génome"):
+    """Karyoplot : SNPs positionnés sur leurs chromosomes."""
+    if snp_df is None or snp_df.empty: return None
+    df = snp_df.copy()
+    df["CHR"] = df["CHR"].astype(str).str.replace(r"^chr", "", regex=True, case=False)
+    df["BP"] = pd.to_numeric(df["BP"], errors="coerce"); df = df.dropna(subset=["BP"])
+    chroms = sorted(df["CHR"].unique(), key=_chk_num)
+    if not chroms: return None
+    n_ch = len(chroms); ypos = {c: i for i, c in enumerate(chroms)}
+    df_plot = df.sample(min(len(df), max_snps), random_state=42) if len(df) > max_snps else df
+    max_bp = {}
+    for c in chroms:
+        sub = df[df["CHR"] == c]
+        if c in ars: max_bp[c] = float(ars[c]) * 1e6
+        elif not sub.empty: max_bp[c] = float(sub["BP"].max())
+        else: max_bp[c] = 100e6
+    colors = px.colors.qualitative.Plotly
+    bar_colors = []
+    if density:
+        counts = df.groupby("CHR").size().reindex(chroms, fill_value=0).astype(float)
+        mn, mx = float(counts.min()), float(counts.max())
+        for c in chroms:
+            t = 0.5 if mx == mn else (counts[c] - mn) / (mx - mn)
+            r = int(255 * t + 255 * (1 - t)); g = int(200 * (1 - t)); b = int(50 * (1 - t))
+            bar_colors.append(f"rgb({r},{g},{b})")
+    else: bar_colors = ["lightgrey"] * n_ch
+    fig = go.Figure()
+    for i, c in enumerate(chroms):
+        fig.add_trace(go.Scatter(x=[0, max_bp[c] / 1e6], y=[i, i], mode="lines",
+                                 line=dict(color=bar_colors[i], width=16),
+                                 hovertemplate=f"Chr{c}<br>Longueur: {max_bp[c]/1e6:.1f} Mb<extra></extra>", showlegend=False))
+    for i, c in enumerate(chroms):
+        sub = df_plot[df_plot["CHR"] == c]
+        if sub.empty: continue
+        fig.add_trace(go.Scatter(x=sub["BP"] / 1e6, y=np.full(len(sub), i, dtype=float), mode="markers",
+                                 marker=dict(size=4, color=colors[i % len(colors)], opacity=0.75, line=dict(width=0.3, color="white")),
+                                 text=sub.get("SNP", pd.Series([""] * len(sub))).astype(str),
+                                 hovertemplate="%{text}<br>Chr" + c + " : %{x:.2f} Mb<extra></extra>", showlegend=False))
+    if highlight_snps is not None and not highlight_snps.empty:
+        hs = highlight_snps.copy()
+        hs["CHR"] = hs["CHR"].astype(str).str.replace(r"^chr", "", regex=True, case=False)
+        for _, h in hs.iterrows():
+            c = str(h["CHR"])
+            if c not in ypos: continue
+            fig.add_trace(go.Scatter(x=[float(h["BP"]) / 1e6], y=[ypos[c]], mode="markers",
+                                     marker=dict(size=15, color="red", symbol="star", line=dict(width=1, color="white")),
+                                     text=[str(h.get("SNP", ""))],
+                                     hovertemplate="⭐ %{text}<br>Chr" + c + " : %{x:.2f} Mb<extra></extra>", showlegend=False))
+    fig.update_layout(title=title, xaxis_title="Position (Mb)",
+                      yaxis=dict(tickmode="array", tickvals=list(range(n_ch)), ticktext=[f"Chr{c}" for c in chroms],
+                                 autorange="reversed", showgrid=True, gridcolor="rgba(0,0,0,0.05)"),
+                      height=max(420, 28 * n_ch + 220), hovermode="closest", plot_bgcolor="white")
+    return fig
+
+def plot_snp_density_heatmap(snp_df, ars, window_kb=1000):
+    """Heatmap densité de SNPs par fenêtre par chromosome."""
+    if snp_df is None or snp_df.empty: return None
+    df = snp_df.copy()
+    df["CHR"] = df["CHR"].astype(str).str.replace(r"^chr", "", regex=True, case=False)
+    df["BP"] = pd.to_numeric(df["BP"], errors="coerce"); df = df.dropna(subset=["BP"])
+    chroms = sorted(df["CHR"].unique(), key=_chk_num)
+    if not chroms: return None
+    max_w = 0; mats = []
+    for c in chroms:
+        sub = df[df["CHR"] == c]; L = float(ars.get(c, 100)) * 1e6
+        nb = max(1, int(np.ceil(L / (window_kb * 1000))))
+        bins = (sub["BP"] / (window_kb * 1000)).astype(int).clip(0, nb - 1)
+        vec = np.zeros(nb, dtype=float)
+        for b in bins: vec[b] += 1
+        mats.append(vec); max_w = max(max_w, nb)
+    M = np.full((len(chroms), max_w), np.nan)
+    for i, v in enumerate(mats): M[i, :len(v)] = v
+    fig = go.Figure(data=go.Heatmap(z=M, x=np.arange(max_w) * window_kb, y=[f"Chr{c}" for c in chroms],
+                                    colorscale="Viridis", colorbar=dict(title="Nb SNPs"),
+                                    hovertemplate="Chr=%{y}<br>Pos≈%{x} kb<br>Nb SNPs=%{z}<extra></extra>"))
+    fig.update_layout(title=f"Densité de SNPs par fenêtre de {window_kb} kb", xaxis_title="Position (kb)",
+                      height=max(400, 30 * len(chroms) + 150))
+    return fig
+
+def auto_ld_section(gt, snp_df, key_prefix="", title=None, max_snp=15000, max_kb=1000, show_stats=True):
+    """Section LD réutilisable, à appeler dans chaque onglet."""
+    label = title or "🔗 Déséquilibre de liaison (LD) — automatique"
+    st.markdown(f"### {label}")
+    if gt is None or gt.size == 0 or gt.shape[1] < 10:
+        st.info("Pas assez de SNPs pour calculer le LD (minimum 10)."); return None
+    try:
+        with st.spinner("Calcul du LD..."):
+            ld = ld_decay(gt, snp_df, max_kb=max_kb, max_snp=max_snp)
+        if ld.empty: st.info("LD non calculable sur ces données."); return None
+        fig = plot_ld(ld)
+        if fig is not None: st.plotly_chart(fig, width='stretch', key=f"ld_{key_prefix}")
+        if show_stats:
+            c1, c2, c3 = st.columns(3)
+            half = ld[ld["r2"] <= 0.2]
+            c1.metric("Demi-distance (r²=0.2)", f"{half['dist_kb'].iloc[0]:.1f} kb" if not half.empty else "—")
+            c2.metric("r² moyen global", f"{ld['r2'].mean():.4f}")
+            c3.metric("Nb fenêtres LD", int(len(ld)))
+            with st.expander("📊 Tableau LD détaillé"):
+                st.dataframe(ld, width='stretch', height=280)
+        return ld
+    except Exception as e:
+        st.warning(f"⚠️ LD : {type(e).__name__} — {e}"); return None
+
+def show_global_summary(gt, ind_df, snp_df, labels, ars):
+    """Résumé global (Shannon + N_e + SNP Map) — affiché en haut de l'app."""
+    with st.expander("📋 Résumé global — cliquez pour afficher", expanded=False):
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Individus", f"{gt.shape[0]:,}"); c2.metric("SNPs", f"{gt.shape[1]:,}")
+        c3.metric("Populations", len(np.unique(labels))); c4.metric("Chromosomes", snp_df["CHR"].nunique())
+        st.markdown("#### 🌿 Diversité (Shannon-Weaver)")
+        sw = shannon_weaver(gt, labels)
+        if not sw.empty:
+            st.dataframe(sw, width='stretch', height=200)
+            f = plot_shannon_weaver(sw)
+            if f: st.plotly_chart(f, width='stretch', key="sw_global")
+        st.markdown("#### 📈 N_e historique")
+        ne = ne_historical(gt, snp_df)
+        if not ne.empty:
+            f = plot_ne(ne)
+            if f: st.plotly_chart(f, width='stretch', key="ne_global")
+        st.markdown("#### 🗺️ Carte des SNPs")
+        f = plot_snp_map(snp_df, ars, density=True)
+        if f: st.plotly_chart(f, width='stretch', key="map_global")
+
 _KEYS = ["gt", "ind_df", "snp_df", "gt_filt", "ind_filt", "snp_filt", "gt_pre", "ind_pre", "snp_pre", "gt_pruned", "snp_pruned", "qc_stats", "pca_s", "pca_v", "mds_c", "king_K", "fst", "fst_M", "fst_pops", "admix_Q", "admix_K", "cv_res", "ld_df", "roh_df", "froh", "ne_dict", "reyn_D", "reyn_pops",
          "pheno_df", "gwas_res", "gwas_pheno", "lambda_gc", "gebv_df", "gblup_stats", "ann_df", "_plink", "_vcf", "mapping_df", "fst_snp_df", "win_fst", "taj_df", "taj_race", "css_df", "pair_res", "pair_res_race", "pair_res_group", "pair_name_race", "pair_name_group",
          "nj_result", "nj_mid", "sel_gff", "sel_ann", "sel_ann_race", "sel_ann_group", "scan_df", "vep_res", "ncbi_gene_res", "lift_res", "div_df", "perm_res", "meta_res", "enr_res", "string_res", "pdb_gene", "pdb_data", "rf_res", "pub_div", "fst_perm", "fstats", "amova_res", "amova_crit", "mantel_res"]
@@ -1619,72 +1675,40 @@ def main():
         elif mode == "PED/MAP":
             ped = st.file_uploader(".ped (ou .txt, .csv)", type=["ped", "txt", "csv", "gz"])
             mp = st.file_uploader(".map (ou .txt)", type=["map", "txt", "gz"])
-
             if ped and mp:
-                # --- DIAGNOSTIC (nouveau) ---
                 if st.button("🔍 Diagnostiquer les fichiers", width='stretch'):
                     try:
-                        d_ped = diagnose_ped(ped.getvalue(), ped.name)
-                        d_map = diagnose_map(mp.getvalue(), mp.name)
-
+                        d_ped = diagnose_ped(ped.getvalue(), ped.name); d_map = diagnose_map(mp.getvalue(), mp.name)
                         st.markdown("**📄 PED**")
-                        if "error" in d_ped:
-                            st.error(f"❌ {d_ped['error']}")
+                        if "error" in d_ped: st.error(f"❌ {d_ped['error']}")
                         else:
-                            for k, v in d_ped.items():
-                                st.text(f"  {k} : {v}")
-
+                            for k, v in d_ped.items(): st.text(f"  {k} : {v}")
                         st.markdown("**🗺️ MAP**")
-                        if "error" in d_map:
-                            st.error(f"❌ {d_map['error']}")
+                        if "error" in d_map: st.error(f"❌ {d_map['error']}")
                         else:
-                            for k, v in d_map.items():
-                                st.text(f"  {k} : {v}")
-
+                            for k, v in d_map.items(): st.text(f"  {k} : {v}")
                         if "error" not in d_ped and "error" not in d_map:
                             n_p = d_ped["n_snps"]; n_m = d_map["n_lines_data"]
-                            if n_p == n_m:
-                                st.success(f"✅ Cohérence : {n_p} SNPs")
-                            else:
-                                st.warning(f"⚠️ PED={n_p}, MAP={n_m} → utilisation de {min(n_p, n_m)} SNPs")
-
+                            if n_p == n_m: st.success(f"✅ Cohérence : {n_p} SNPs")
+                            else: st.warning(f"⚠️ PED={n_p}, MAP={n_m} → utilisation de {min(n_p, n_m)} SNPs")
                         with st.expander("Aperçu des fichiers"):
                             st.markdown("**PED (3 lignes)**")
-                            for l in preview_lines(ped.getvalue(), 3):
-                                st.code(l, language=None)
+                            for l in preview_lines(ped.getvalue(), 3): st.code(l, language=None)
                             st.markdown("**MAP (3 lignes)**")
-                            for l in preview_lines(mp.getvalue(), 3):
-                                st.code(l, language=None)
-                    except Exception as e:
-                        st.error(f"❌ Diagnostic échoué : {type(e).__name__}: {e}")
-
-                # --- CHARGEMENT ---
+                            for l in preview_lines(mp.getvalue(), 3): st.code(l, language=None)
+                    except Exception as e: st.error(f"❌ Diagnostic échoué : {type(e).__name__}: {e}")
                 if st.button("📥 Charger les fichiers", type="primary", width='stretch'):
                     try:
-                        with st.spinner("Lecture MAP..."):
-                            mdf = parse_map(mp.getvalue())
-                        with st.spinner(f"Lecture PED ({len(mdf)} SNPs attendus)..."):
-                            gt, ind, a1, a2 = parse_ped(ped.getvalue(), len(mdf))
-                        n = min(gt.shape[1], len(mdf))
-                        mdf = mdf.iloc[:n].reset_index(drop=True)
-                        gt = gt[:, :n]
-                        mdf["A1"] = a1[:n]
-                        mdf["A2"] = a2[:n]
-                        reset_derived(keep=())
-                        ss.update({"gt": gt, "ind_df": rec_fid(ind), "snp_df": mdf})
-                        st.success(f"✅ {gt.shape[0]} ind × {gt.shape[1]} SNPs chargés")
-                    except MemoryError:
-                        st.error("❌ Mémoire insuffisante. Filtrez les SNPs avant l'upload ou essayez un fichier plus petit.")
-                    except Exception as e:
-                        st.error(f"❌ {type(e).__name__}: {e}")
-
-                # --- BONUS : Nettoyer en PED standard ---
+                        with st.spinner("Lecture MAP..."): mdf = parse_map(mp.getvalue())
+                        with st.spinner(f"Lecture PED ({len(mdf)} SNPs attendus)..."): gt, ind, a1, a2 = parse_ped(ped.getvalue(), len(mdf))
+                        n = min(gt.shape[1], len(mdf)); mdf = mdf.iloc[:n].reset_index(drop=True); gt = gt[:, :n]; mdf["A1"] = a1[:n]; mdf["A2"] = a2[:n]
+                        reset_derived(keep=()); ss.update({"gt": gt, "ind_df": rec_fid(ind), "snp_df": mdf}); st.success(f"✅ {gt.shape[0]} ind × {gt.shape[1]} SNPs chargés")
+                    except MemoryError: st.error("❌ Mémoire insuffisante. Filtrez les SNPs avant l'upload ou essayez un fichier plus petit.")
+                    except Exception as e: st.error(f"❌ {type(e).__name__}: {e}")
                 if st.button("📤 Nettoyer en PED standard PLINK", width='stretch'):
                     try:
-                        cleaned = clean_ped_to_plink(ped.getvalue())
-                        st.download_button("⬇ Télécharger PED nettoyé", cleaned.encode(), "cleaned.ped", "text/plain", width='stretch')
-                    except Exception as e:
-                        st.error(f"❌ {type(e).__name__}: {e}")
+                        cleaned = clean_ped_to_plink(ped.getvalue()); st.download_button("⬇ Télécharger PED nettoyé", cleaned.encode(), "cleaned.ped", "text/plain", width='stretch')
+                    except Exception as e: st.error(f"❌ {type(e).__name__}: {e}")
         elif mode == "VCF":
             vf = st.file_uploader(".vcf", type=["vcf", "gz"])
             if vf and st.button("📥 Charger"):
@@ -1698,8 +1722,7 @@ def main():
                 try:
                     s, g, ns = parse_axiom(af.getvalue(), af.name)
                     if map_file:
-                        mdf = parse_map(map_file.getvalue())
-                        n_m = min(len(mdf), ns)
+                        mdf = parse_map(map_file.getvalue()); n_m = min(len(mdf), ns)
                         mpl = [f"{row['CHR']}\t{row['SNP']}\t{row['CM']}\t{row['BP']}" for _, row in mdf.iloc[:n_m].iterrows()]
                         st.info(f"✅ Utilisation de votre fichier .map réel ({n_m} SNPs). Tous les chromosomes sont conservés.")
                     else:
@@ -1720,11 +1743,10 @@ def main():
         ld_r2 = st.slider("LD r²", 0.05, 0.5, 0.2, 0.05); ld_w = st.slider("LD fenêtre (SNPs)", 20, 200, 50, 10)
 
     if ss.gt is None: st.info(f"👉 Chargez des données pour {species_choice} (Demo recommandé)."); return
-    st.title(f"🐾 {species_choice} Genomics Pipeline v23.7")
-    tabs = st.tabs(["🧹 QC", "✂️ LD", "🧬 Structure", "🎨 Admixture", "📈 Démographie", "🔍 Sélection", "🧪 GWAS Classique", "🎯 Post-GWAS", "📈 GBLUP", "🧬 Annotation", "🧬 VEP & NCBI", "🧬 Structure 3D", "🧬 Alignement", "📤 Export", "🔬 Méta-analyse", "🧠 ML", "🧬 Génotypes/blocs", "🌍 Orthologue humain", "📐 Stats publication"])
+    st.title(f"🐾 {species_choice} Genomics Pipeline v23.8")
+    tabs = st.tabs(["🧹 QC", "✂️ LD", "🧬 Structure", "🎨 Admixture", "📈 Démographie", "🔍 Sélection", "🧪 GWAS Classique", "🎯 Post-GWAS", "📈 GBLUP", "🧬 Annotation", "🧬 VEP & NCBI", "🧬 Structure 3D", "🧬 Alignement", "📤 Export", "🔬 Méta-analyse", "🧠 ML", "🧬 Génotypes/blocs", "🌍 Orthologue humain", "📐 Stats publication", "🗺️ Carte SNPs"])
     NEED_QC = "⚠️ Lancez d'abord le QC (onglet 🧹)."
 
-    # ---------------- QC ----------------
     with tabs[0]:
         if st.button("▶ Lancer QC", key="qc_btn"):
             try:
@@ -1736,8 +1758,9 @@ def main():
             s = ss.qc_stats; c1, c2, c3, c4 = st.columns(4); c1.metric("Individus", s["n_ind_final"], delta=-s["excluded_ind"]); c2.metric("SNPs", s["n_snp_final"], delta=-s["excluded_snp"])
             c3.metric("Individus avant outliers", s["n_ind_pre"]); c4.metric("Outliers (het)", s["trace"].get("het", 0)); st.caption(f"Détail des exclusions SNP/individus : {s['trace']}")
         st.plotly_chart(plot_missing(miss_ind(ss.gt), miss_snp(ss.gt)), width='stretch', key="plot_missing_qc"); st.caption("Histogrammes calculés sur les données brutes (avant QC).")
+        if ss.gt_filt is not None:
+            auto_ld_section(ss.gt_filt, ss.snp_filt, key_prefix="qc")
 
-    # ---------------- LD ----------------
     with tabs[1]:
         if ss.gt_filt is None: st.info(NEED_QC)
         else:
@@ -1754,7 +1777,6 @@ def main():
                 if f: st.plotly_chart(f, width='stretch', key="plot_ld_decay")
                 else: st.warning("Pas assez de paires de SNPs proches pour estimer le LD.")
 
-    # ---------------- Structure ----------------
     with tabs[2]:
         if ss.gt_filt is None: st.info(NEED_QC)
         else:
@@ -1780,7 +1802,16 @@ def main():
                 st.info(f"**Moyennes :** He = {d['H_Attendue (He)'].mean():.4f} | Ho = {d['H_Observee (Ho)'].mean():.4f} | PIC = {d['PIC'].mean():.4f} | Fis = {d['Fis (Consanguinité)'].mean():.4f}")
             elif ss.div_df is not None: st.warning("Aucune population avec ≥ 3 individus.")
 
-    # ---------------- Admixture ----------------
+            st.divider(); st.subheader("🌿 Diversité — Shannon-Weaver & Pielou")
+            sw = shannon_weaver(gu, iu["FID"].astype(str).values)
+            if not sw.empty:
+                st.dataframe(sw, width='stretch')
+                f_sw = plot_shannon_weaver(sw)
+                if f_sw: st.plotly_chart(f_sw, width='stretch', key="plot_sw_tab")
+            else: st.info("Pas assez de populations valides.")
+        if ss.gt_filt is not None:
+            auto_ld_section(ss.gt_filt, ss.snp_filt, key_prefix="struct")
+
     with tabs[3]:
         if ss.gt_filt is None: st.info(NEED_QC)
         else:
@@ -1797,7 +1828,6 @@ def main():
             if ss.admix_Q is not None and len(ss.admix_Q) == len(iu):
                 f, _ = plot_admix(ss.admix_Q, iu["IID"].values, iu["FID"].values, ss.admix_K); st.plotly_chart(f, width='stretch', key="plot_admix_tab")
 
-    # ---------------- Démographie ----------------
     with tabs[4]:
         if ss.gt_filt is None: st.info(NEED_QC)
         else:
@@ -1828,9 +1858,12 @@ def main():
                 fig = go.Figure()
                 for k, d in ss.ne_dict.items(): fig.add_trace(go.Scatter(x=d["GenAgo"], y=d["Ne"], mode="lines+markers", name=k))
                 fig.update_layout(title="Ne historique (LD, Sved 1971)", xaxis_title="Générations passées", yaxis_title="Ne", xaxis_type="log", yaxis_type="log", height=450); st.plotly_chart(fig, width='stretch', key="plot_ne")
+                # ✨ v23.8 : affichage alternatif plot_ne (par population, premier groupe)
+                first_pop = list(ss.ne_dict.keys())[0]
+                f_ne2 = plot_ne(ss.ne_dict[first_pop], title=f"N_e enrichi — {first_pop}", show_ci=True)
+                if f_ne2: st.plotly_chart(f_ne2, width='stretch', key="plot_ne_enhanced")
 
-    # ---------------- Sélection ----------------
-    with tabs[5]:
+        with tabs[5]:
         st.subheader("🔍 Sélection & structure des populations")
         if ss.gt_filt is None: st.info(NEED_QC)
         else:
@@ -1981,8 +2014,9 @@ def main():
                 except Exception as e:
                     if str(e) != "GFF vide": st.error(f"❌ {e}")
             else: st.info("💡 [GFF3 Ensembl](https://ftp.ensembl.org/pub/current_gff3/)")
+            if ss.gt_filt is not None:
+                auto_ld_section(ss.gt_filt, ss.snp_filt, key_prefix="sel")
 
-    # ---------------- GWAS classique ----------------
     with tabs[6]:
         if ss.gt_filt is None: st.info(NEED_QC)
         else:
@@ -2027,8 +2061,9 @@ def main():
                 st.plotly_chart(plot_manhattan(r, yc=yc_choice, title="Manhattan", thr=-np.log10(0.05 / len(r))), width='stretch', key="plot_gwas_manh_classic"); st.plotly_chart(plot_qq(r["P"].values), width='stretch', key="plot_gwas_qq")
                 show_cols = [c for c in ["SNP", "CHR", "BP", "MAF", "BETA", "SE", "T", "P", "FDR"] if c in r.columns]; st.dataframe(r[show_cols].head(20), width='stretch'); st.download_button("⬇ CSV GWAS", r.to_csv(index=False).encode(), "gwas.csv", "text/csv")
             elif r is not None: st.warning("Aucun SNP testable (MAF/missing trop stricts ?).")
+            if ss.gt_filt is not None:
+                auto_ld_section(ss.gt_filt, ss.snp_filt, key_prefix="gwas")
 
-    # ---------------- Post-GWAS ----------------
     with tabs[7]:
         if ss.gwas_res is not None and len(ss.gwas_res):
             st.subheader("🎯 Fine-mapping (ABF de Wakefield / PIP)"); wmb = st.slider("Fenêtre autour du SNP principal (± Mb)", 0.1, 5.0, 1.0, 0.1, key="fm_win")
@@ -2040,7 +2075,6 @@ def main():
                 st.info(f"Ensemble de crédibilité à 95 % : **{int((pip['CUM_PIP'].shift(fill_value=0) < 0.95).sum())}** SNP(s)")
         else: st.warning("Lancez GWAS d'abord")
 
-    # ---------------- GBLUP ----------------
     with tabs[8]:
         if ss.pheno_df is not None and ss.gt_filt is not None and len(ss.pheno_df) == len(ss.ind_filt):
             cols = [c for c in ss.pheno_df.columns if c not in ("FID", "IID", "Animal")]; pc = st.selectbox("Phénotype GBLUP", cols, key="gb_pc")
@@ -2053,7 +2087,6 @@ def main():
             if ss.gebv_df is not None: st.plotly_chart(plot_gblup(ss.gebv_df), width='stretch', key="plot_gblup"); st.json(ss.gblup_stats)
         else: st.warning("Chargez les phénotypes (onglet GWAS Classique)")
 
-    # ---------------- Annotation dédiée ----------------
     with tabs[9]:
         gff_f = st.file_uploader("GFF3/GTF", type=["gff", "gff3", "gtf", "gz"], key="ann_ded_gff"); src = st.radio("Source", ["Sélection", "GWAS"], horizontal=True, key="ann_ded_src"); wk = st.slider("Fenêtre kb", 1, 500, 50, key="ann_ded_wk")
         if gff_f:
@@ -2065,7 +2098,6 @@ def main():
                 if ss.ann_df is not None: st.dataframe(ss.ann_df, width='stretch')
             except Exception as e: st.error(f"❌ {e}")
 
-    # ---------------- VEP & NCBI ----------------
     with tabs[10]:
         st.subheader("🧬 Annotation Fonctionnelle (VEP & NCBI)"); sources_snp = []
         if ss.get("pair_res_group") is not None and not ss.pair_res_group.empty: sources_snp.append("Top SNPs Groupe")
@@ -2110,7 +2142,6 @@ def main():
                 if ss.get("ncbi_gene_res") is not None and not ss.ncbi_gene_res.empty:
                     st.dataframe(ss.ncbi_gene_res, width='stretch'); st.download_button("⬇ CSV NCBI", ss.ncbi_gene_res.to_csv(index=False).encode(), "ncbi_gene_info.csv", "text/csv")
 
-    # ---------------- Structure 3D ----------------
     with tabs[11]:
         st.subheader("🧬 AlphaFold — Visualisation 3D"); genes_to_structure = []
         for key in ("vep_res", "sel_ann", "ann_df"):
@@ -2131,7 +2162,6 @@ def main():
                     else: st.error("❌ Gène non trouvé dans UniProt.")
             if ss.pdb_data and ss.pdb_gene == target_gene: st.info("💡 Cliquer-glisser pour tourner, molette pour zoomer."); render_3d_structure(ss.pdb_data, style=view_style, color_scheme=color_scheme, highlight_res=highlight_res)
 
-    # ---------------- Alignement ----------------
     with tabs[12]:
         st.subheader("🧬 Illustration allélique autour d'un SNP")
         if not HAS_BIO: st.error("⚠️ Biopython requis : `pip install biopython`")
@@ -2152,7 +2182,6 @@ def main():
                     else: st.error("❌ Ensembl n'a pas retourné la séquence.")
             else: st.warning("⚠️ Lancez d'abord un GWAS ou une analyse Groupe/Race.")
 
-    # ---------------- Export ----------------
     with tabs[13]:
         if ss.gt_filt is None: st.info(NEED_QC)
         else:
@@ -2166,7 +2195,6 @@ def main():
                 except Exception as e: st.error(f"❌ {e}")
             if ss._vcf: st.download_button("⬇ VCF", ss._vcf, f"{PREFIX}.vcf", "text/plain")
 
-    # ---------------- Méta-analyse ----------------
     with tabs[14]:
         st.subheader("🔬 Méta-analyse & Enrichissement"); st.markdown("## 1️⃣ Permutation GWAS")
         if ss.gt_filt is not None:
@@ -2231,7 +2259,6 @@ def main():
                 if fig: st.plotly_chart(fig, width='stretch', key="string_network_plot")
                 st.dataframe(edges, width='stretch'); st.download_button("⬇ CSV", edges.to_csv(index=False).encode(), "string_network.csv", "text/csv")
 
-    # ---------------- ML ----------------
     with tabs[15]:
         st.subheader("🧠 Random Forest")
         if ss.gt_filt is not None and ss.get("pheno_df") is not None and len(ss.pheno_df) == len(ss.ind_filt):
@@ -2253,7 +2280,6 @@ def main():
                     fig = px.bar(df_imp, x="Importance", y="SNP", orientation="h", title="Top 15 SNPs"); fig.update_layout(yaxis={"categoryorder": "total ascending"}); st.plotly_chart(fig, width='stretch', key="plot_rf")
         else: st.warning("⚠️ Chargez données + phénotypes.")
 
-    # ---------------- Génotypes / blocs ----------------
     with tabs[16]:
         st.subheader("🧬 Carte des génotypes par chromosome")
         if ss.gt_filt is None: st.info(NEED_QC)
@@ -2265,7 +2291,6 @@ def main():
                 st.plotly_chart(fig, width='stretch', key="plot_hap"); st.caption("🖱️ Génotypes NON phasés (0/1/2 copies de l'allèle minoritaire) : ce n'est pas une inférence de haplotypes.")
             else: st.warning("Aucun SNP sur ce chromosome.")
 
-    # ---------------- Orthologue ----------------
     with tabs[17]:
         st.subheader("🌍 Gène chevauchant → orthologue humain (Ensembl Compara)")
         if ss.get("snp_filt") is not None:
@@ -2280,7 +2305,6 @@ def main():
                 else: st.success(f"✅ {res['gene_src']} → **{res['human_gene']}** (humain, chr{res['chr']}:{res['start']}-{res['end']}, {res.get('assembly', '')}, identité {res.get('perc_id', 'N/A')} %)"); st.info("💡 Interroger le GWAS Catalog pour ce gène humain.")
         else: st.warning("Chargez des données.")
 
-    # ---------------- Stats publication ----------------
     with tabs[18]:
         st.subheader("📐 Statistiques pour publication")
         if ss.gt_filt is None: st.info(NEED_QC)
@@ -2301,6 +2325,13 @@ def main():
             if ss.get("pub_div") is not None:
                 tbl, g_used = ss.pub_div; st.dataframe(tbl, width='stretch'); st.download_button("⬇ Tableau 1 (CSV)", tbl.to_csv(index=False).encode(), "tableau_diversite_complet.csv", "text/csv")
                 st.caption(f"Ar : raréfaction à g = {g_used} gènes (même taille d'échantillon pour toutes les races). π et θ_W : par SNP typé, sans correction par la longueur : sur puce SNP (biais d'ascertainment), comparer les races entre elles, pas à des valeurs par pb de la littérature. Les allèles privés dépendent de la taille d'échantillon : à interpréter avec Ar.")
+
+            st.markdown("### 🌿 Diversité — Shannon-Weaver & Pielou (bonus v23.8)")
+            sw_pub = shannon_weaver(gf, lab_all)
+            if not sw_pub.empty:
+                st.dataframe(sw_pub, width='stretch')
+                f_sw2 = plot_shannon_weaver(sw_pub)
+                if f_sw2: st.plotly_chart(f_sw2, width='stretch', key="plot_sw_pub")
 
             st.divider(); st.markdown("### 2️⃣ FST pairwise : p-values par permutation et IC95 %")
             c1, c2 = st.columns(2); nperm = c1.slider("Permutations", 100, 2000, 1000, 100, key="pub_nperm"); nboot = c2.slider("Bootstrap loci (IC)", 100, 2000, 1000, 100, key="pub_nboot")
@@ -2366,5 +2397,23 @@ def main():
                 if len(m["x"]) > 1: z = np.polyfit(m["x"], m["y"], 1); xs = np.linspace(m["x"].min(), m["x"].max(), 50); fg.add_trace(go.Scatter(x=xs, y=np.poly1d(z)(xs), mode="lines", name="régression", line=dict(color="red", dash="dash")))
                 st.plotly_chart(fg, width='stretch', key="plot_pub_ibd")
 
+            if ss.gt_filt is not None:
+                auto_ld_section(ss.gt_filt, ss.snp_filt, key_prefix="pub")
+
+    with tabs[19]:
+        st.subheader("🗺️ Carte des SNPs sur le génome (karyoplot)")
+        if ss.gt_filt is None: st.info(NEED_QC)
+        else:
+            use_density = st.checkbox("Colorer par densité", value=False, key="snp_map_density")
+            fig_map = plot_snp_map(ss.snp_filt, ARS, density=use_density)
+            if fig_map is not None: st.plotly_chart(fig_map, width='stretch', key="plot_snp_map_tab")
+            st.divider(); st.subheader("🔥 Heatmap densité de SNPs")
+            wk = st.selectbox("Fenêtre densité (kb)", [100, 500, 1000, 5000], index=2, key="dens_w")
+            fig_heat = plot_snp_density_heatmap(ss.snp_filt, ARS, window_kb=wk)
+            if fig_heat is not None: st.plotly_chart(fig_heat, width='stretch', key="plot_density_heat_tab")
+
+
 if __name__ == "__main__":
     main()
+
+
