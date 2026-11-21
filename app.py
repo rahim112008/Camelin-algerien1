@@ -1863,7 +1863,7 @@ def main():
                 f_ne2 = plot_ne(ss.ne_dict[first_pop], title=f"N_e enrichi — {first_pop}", show_ci=True)
                 if f_ne2: st.plotly_chart(f_ne2, width='stretch', key="plot_ne_enhanced")
 
-        with tabs[5]:
+    with tabs[5]:
         st.subheader("🔍 Sélection & structure des populations")
         if ss.gt_filt is None: st.info(NEED_QC)
         else:
