@@ -1742,7 +1742,7 @@ def show_global_summary(gt, ind_df, snp_df, labels, ars):
 # INTERFACE STREAMLIT — PARTIE 1/2
 # ============================================================
 _KEYS = ["gt", "ind_df", "snp_df", "gt_filt", "ind_filt", "snp_filt", "gt_pre", "ind_pre", "snp_pre", "gt_pruned", "snp_pruned", "qc_stats", "pca_s", "pca_v", "mds_c", "king_K", "fst", "fst_M", "fst_pops", "admix_Q", "admix_K", "cv_res", "ld_df", "roh_df", "froh", "ne_dict", "reyn_D", "reyn_pops",
-         "pheno_df", "gwas_res", "gwas_pheno", "lambda_gc", "gebv_df", "gblup_stats", "ann_df", "_plink", "_vcf", "_pedmap", "mapping_df", "fst_snp_df", "win_fst", "taj_df", "taj_race", "css_df", "pair_res", "pair_res_race", "pair_res_group", "pair_name_race", "pair_name_group",
+         "pheno_df", "gwas_res", "gwas_pheno", "lambda_gc", "gebv_df", "gblup_stats", "ann_df", "_plink", "_vcf", "_pedmap", "_prune_sig", "_prune_warn", "mapping_df", "fst_snp_df", "win_fst", "taj_df", "taj_race", "css_df", "pair_res", "pair_res_race", "pair_res_group", "pair_name_race", "pair_name_group",
          "nj_result", "nj_mid", "sel_gff", "sel_ann", "sel_ann_race", "sel_ann_group", "scan_df", "vep_res", "ncbi_gene_res", "lift_res", "div_df", "perm_res", "meta_res", "enr_res", "string_res", "pdb_gene", "pdb_data", "rf_res", "pub_div", "fst_perm", "fstats", "amova_res", "amova_crit", "mantel_res"]
 
 def reset_derived(keep=("gt", "ind_df", "snp_df")):
@@ -1753,11 +1753,27 @@ def init_state():
     for k in _KEYS:
         if k not in st.session_state: st.session_state[k] = None
 
-def work_data():
+def get_pruned(ld_w, ld_r2):
+    """Élagage LD AUTOMATIQUE : calculé une seule fois après le QC, recalculé seulement si les seuils LD changent."""
     ss = st.session_state
-    gu = ss.gt_pruned if ss.gt_pruned is not None else ss.gt_filt
-    su = ss.snp_pruned if ss.snp_pruned is not None else ss.snp_filt
-    return gu, su, ss.ind_filt
+    if ss.gt_filt is None: return
+    sig = (ss.gt_filt.shape, int(ld_w), float(ld_r2))
+    if ss.gt_pruned is not None and ss.get("_prune_sig") == sig: return
+    with st.spinner("Élagage LD automatique (par chromosome)..."):
+        k = ld_pruning(ss.gt_filt, ss.snp_filt["CHR"].astype(str).values, int(ld_w), 5, float(ld_r2))
+    ss["_prune_warn"] = None
+    if int(np.sum(k)) < 30:
+        k = np.ones(ss.gt_filt.shape[1], dtype=bool)
+        ss["_prune_warn"] = "Moins de 30 SNPs après élagage : les analyses de structure utilisent tous les SNPs QC."
+    ss.update({"gt_pruned": ss.gt_filt[:, k], "snp_pruned": ss.snp_filt.iloc[np.where(k)[0]].reset_index(drop=True), "_prune_sig": sig,
+               "pca_s": None, "pca_v": None, "mds_c": None, "king_K": None, "admix_Q": None})
+
+def work_data(kind="pruned"):
+    """kind='pruned' : SNPs élagués LD (structure, parenté, FST/distances, ML).
+       kind='full'   : tous les SNPs filtrés QC, non élagués (ROH, Ne, scans de sélection, tests GWAS, diversité)."""
+    ss = st.session_state
+    if kind == "full" or ss.gt_pruned is None: return ss.gt_filt, ss.snp_filt, ss.ind_filt
+    return ss.gt_pruned, ss.snp_pruned, ss.ind_filt
 
 def show_pair(key, name_key, plot_key):
     r = st.session_state.get(key)
@@ -1900,6 +1916,7 @@ def main():
     if DEMO:
         st.info("🧪 Mode démo : données simulées préchargées (QC déjà appliqué). Explorez les onglets — aucune donnée personnelle n'est utilisée.")
         st.markdown("<a href='" + SITE_URL + "' target='_top' style='color:#37d7f2;font-weight:700'>Demander l'analyse complète sur vos données →</a>", unsafe_allow_html=True)
+    if ss.gt_filt is not None: get_pruned(ld_w, ld_r2)
     tabs = st.tabs(["🧹 QC", "✂️ LD", "🧬 Structure", "🎨 Admixture", "📈 Démographie", "🔍 Sélection",
                 "🧪 GWAS Classique", "🎯 Post-GWAS", "📈 GBLUP", "🧬 Annotation", "🧬 VEP & NCBI",
                 "🧬 Structure 3D", "🧬 Alignement", "📤 Export", "🔬 Méta-analyse", "🧠 ML",
@@ -1912,7 +1929,7 @@ def main():
             try:
                 p = {"geno": geno, "mind": mind, "maf": maf_t, "hwe": hwe_t, "het_sd": het_sd, "hwe_pop": hwe_pop, "hwe_k": hwe_k}
                 gf, inf, snf, qs = apply_qc(ss.gt, ss.ind_df, ss.snp_df, p, AUTO, keep_autosomes=keep_auto, rem_out=rem_out)
-                reset_derived(keep=("gt", "ind_df", "snp_df", "mapping_df")); ss.update({"gt_filt": gf, "ind_filt": inf, "snp_filt": snf, "qc_stats": qs}); st.success(f"✅ {gf.shape[0]}×{gf.shape[1]} (analyses aval réinitialisées)")
+                reset_derived(keep=("gt", "ind_df", "snp_df", "mapping_df")); ss.update({"gt_filt": gf, "ind_filt": inf, "snp_filt": snf, "qc_stats": qs}); get_pruned(ld_w, ld_r2); st.success(f"✅ {gf.shape[0]}×{gf.shape[1]} (analyses aval réinitialisées) · élagage LD automatique : {ss.gt_pruned.shape[1]} SNPs conservés")
             except Exception as e: st.error(f"❌ {e}")
         if ss.qc_stats:
             s = ss.qc_stats; c1, c2, c3, c4 = st.columns(4); c1.metric("Individus", s["n_ind_final"], delta=-s["excluded_ind"]); c2.metric("SNPs", s["n_snp_final"], delta=-s["excluded_snp"]); c3.metric("Individus avant outliers", s["n_ind_pre"]); c4.metric("Outliers (het)", s["trace"].get("het", 0)); st.caption(f"Détail des exclusions : {s['trace']}")
@@ -1925,10 +1942,21 @@ def main():
     with tabs[1]:
         if ss.gt_filt is None: st.info(NEED_QC)
         else:
-            if st.button("▶ LD Pruning", key="ld_btn"):
-                with st.spinner("Élagage LD par chromosome..."): k = ld_pruning(ss.gt_filt, ss.snp_filt["CHR"].astype(str).values, int(ld_w), 5, ld_r2)
-                ss.update({"gt_pruned": ss.gt_filt[:, k], "snp_pruned": ss.snp_filt.iloc[np.where(k)[0]].reset_index(drop=True), "pca_s": None, "pca_v": None, "mds_c": None, "king_K": None, "admix_Q": None}); st.success(f"✅ {ss.gt_pruned.shape[1]} SNPs conservés")
-            if ss.gt_pruned is not None: c1, c2, c3 = st.columns(3); c1.metric("Avant", ss.gt_filt.shape[1]); c2.metric("Après", ss.gt_pruned.shape[1]); c3.metric("Réduction", f"{100 * (1 - ss.gt_pruned.shape[1] / ss.gt_filt.shape[1]):.1f}%")
+            st.info("✅ L'élagage LD est **automatique** : il est calculé dès que le QC est fait, avec les seuils r² et fenêtre de la barre latérale (recalculé si vous les changez).")
+            if ss.get("_prune_warn"): st.warning(f"⚠️ {ss._prune_warn}")
+            if ss.gt_pruned is not None: c1, c2, c3 = st.columns(3); c1.metric("SNPs avant élagage", ss.gt_filt.shape[1]); c2.metric("SNPs après élagage", ss.gt_pruned.shape[1]); c3.metric("Réduction", f"{100 * (1 - ss.gt_pruned.shape[1] / ss.gt_filt.shape[1]):.1f}%")
+            with st.expander("📋 Quel jeu de SNPs pour quelle analyse ? (automatique)", expanded=True):
+                st.markdown("""
+| Analyse | Jeu de SNPs utilisé |
+|---|---|
+| PCA, MDS, KING, Admixture | **Élagués LD** |
+| FST pairwise, Reynolds, arbre UPGMA, AMOVA, Mantel | **Élagués LD** |
+| Matrice de parenté (GRM) du GWAS, PCA covariables, ML | **Élagués LD** |
+| Diversité (Ho, He, PIC, Shannon), allèles privés, HWE | **Tous les SNPs QC** |
+| ROH, Ne historique, décroissance du LD, blocs | **Tous les SNPs QC** |
+| Scans de sélection (FST par SNP, fenêtres, Tajima, CSS) | **Tous les SNPs QC** |
+| Tests d'association GWAS (classique, case-control, permutations), GBLUP, export | **Tous les SNPs QC** |
+""")
             if st.button("▶ LD Decay (sur SNPs non élagués)", key="ld_decay_btn"):
                 with st.spinner("Calcul du LD..."): ss.ld_df = ld_decay(ss.gt_filt, ss.snp_filt)
             if ss.ld_df is not None:
@@ -1940,7 +1968,7 @@ def main():
     with tabs[2]:
         if ss.gt_filt is None: st.info(NEED_QC)
         else:
-            gu, su, iu = work_data()
+            gu, su, iu = work_data(); gfull, _, _ = work_data("full")
             if st.button("▶ PCA + MDS + KING", key="struct_btn"):
                 try:
                     with st.spinner("PCA, MDS, KING..."): s_, v_ = pca_analysis(gu, 10); ss.update({"pca_s": s_, "pca_v": v_, "mds_c": mds_analysis(gu, 5), "king_K": king_mat(gu)})
@@ -1954,14 +1982,14 @@ def main():
             if st.button("Calculer la Diversité", type="primary", key="div_btn"):
                 try: 
                     with st.spinner("Calcul..."):
-                        ss.div_df = compute_diversity(gu, iu["FID"].astype(str).values)
+                        ss.div_df = compute_diversity(gfull, iu["FID"].astype(str).values)
                 except Exception as e:
                         st.error(f"❌ {e}")
             if ss.div_df is not None and not ss.div_df.empty:
                 d = ss.div_df; st.dataframe(d, width='stretch'); st.download_button("⬇ CSV", d.to_csv(index=False).encode("utf-8"), "tableau_diversite.csv", "text/csv"); st.plotly_chart(px.bar(d, x="Population", y=["H_Observee (Ho)", "H_Attendue (He)"], barmode="group", title="Ho vs He par Population", labels={"value": "Hétérozygotie", "variable": "Type"}), width='stretch', key="plot_div"); st.info(f"**Moyennes :** He = {d['H_Attendue (He)'].mean():.4f} | Ho = {d['H_Observee (Ho)'].mean():.4f} | PIC = {d['PIC'].mean():.4f} | Fis = {d['Fis (Consanguinité)'].mean():.4f}")
             elif ss.div_df is not None: st.warning("Aucune population avec ≥ 3 individus.")
             st.divider(); st.subheader("🌿 Diversité — Shannon-Weaver & Pielou")
-            sw = shannon_weaver(gu, iu["FID"].astype(str).values)
+            sw = shannon_weaver(gfull, iu["FID"].astype(str).values)
             if not sw.empty:
                 st.dataframe(sw, width='stretch'); st.download_button("⬇ CSV Shannon-Weaver", sw.to_csv(index=False).encode("utf-8"), "shannon_weaver.csv", "text/csv", key="dl_sw")
                 f_sw = plot_shannon_weaver(sw)
@@ -2025,12 +2053,12 @@ def main():
         st.subheader("🔍 Sélection & structure des populations")
         if ss.gt_filt is None: st.info(NEED_QC)
         else:
-            gu, su, iu = work_data(); lab = iu["FID"].astype(str).values; use_wc = st.checkbox("Utiliser Weir & Cockerham (1984)", value=True, key="use_wc84")
+            gu, su, iu = work_data("full"); g_pr, s_pr, _ = work_data(); lab = iu["FID"].astype(str).values; use_wc = st.checkbox("Utiliser Weir & Cockerham (1984)", value=True, key="use_wc84")
             if st.button("▶ FST pairwise + Reynolds", key="fst_btn"):
                 try:
                     if len(set(lab)) < 2: raise ValueError("Au moins 2 populations (FID) requises")
                     with st.spinner("FST..."):
-                        ss.fst = fst_snp_wc(gu, lab); ss.fst_snp_df = su.copy(); M, pops = fst_pairwise(gu, lab, use_wc84=use_wc); ss.update({"fst_M": M, "fst_pops": pops}); D, rp = reynolds(gu, lab); ss.update({"reyn_D": D, "reyn_pops": rp})
+                        ss.fst = fst_snp_wc(gu, lab); ss.fst_snp_df = su.copy(); M, pops = fst_pairwise(g_pr, lab, use_wc84=use_wc); ss.update({"fst_M": M, "fst_pops": pops}); D, rp = reynolds(g_pr, lab); ss.update({"reyn_D": D, "reyn_pops": rp})
                     st.success("✅")
                 except Exception as e: st.error(f"❌ {e}")
             if ss.fst is not None:
@@ -2043,7 +2071,7 @@ def main():
                 c1, c2 = st.columns(2); nb = c1.slider("Bootstrap", 10, 500, 100, 10, key="nj_boot"); ro = c2.selectbox("Root", ["Non-enraciné", "Midpoint"], key="nj_root")
                 if st.button("🌲 Construire l'arbre", type="primary", key="nj_btn"):
                     try:
-                        with st.spinner(f"UPGMA + {nb} boot..."): r = upgma_bootstrap(gu, su, lab, n_boot=int(nb)); ss.nj_result = r; ss.nj_mid = midpoint_info(r["D"], r["pops"])
+                        with st.spinner(f"UPGMA + {nb} boot..."): r = upgma_bootstrap(g_pr, s_pr, lab, n_boot=int(nb)); ss.nj_result = r; ss.nj_mid = midpoint_info(r["D"], r["pops"])
                         st.success("✅")
                     except Exception as e: st.error(f"❌ {e}")
                 if ss.nj_result is not None:
@@ -2194,8 +2222,10 @@ def main():
                         st.info(f"✅ {nv} valides")
                         if st.button("🚀 Lancer GWAS", type="primary", key="gwas_btn"):
                             try:
-                                gg, sg, _ = work_data(); cv = ss.pca_s[:, :5] if (ss.pca_s is not None and len(ss.pca_s) == gg.shape[0]) else None
-                                with st.spinner("GWAS..."): Kg = grm_vanraden(gg) if (use_lmm and not ib) else None; r = run_gwas(gg, ps.values, Kg, cv, use_lmm=use_lmm and not ib, is_bin=ib); r = annotate_gwas(r, sg); r = postprocess_gwas(r, apply_gc=True)
+                                gg, sg, _ = work_data("full"); gp_k, _, _ = work_data()
+                                if ss.pca_s is None or len(ss.pca_s) != gg.shape[0]: s_a, v_a = pca_analysis(gp_k, 10); ss.update({"pca_s": s_a, "pca_v": v_a})
+                                cv = ss.pca_s[:, :5] if (ss.pca_s is not None and len(ss.pca_s) == gg.shape[0]) else None
+                                with st.spinner("GWAS..."): Kg = grm_vanraden(gp_k) if (use_lmm and not ib) else None; r = run_gwas(gg, ps.values, Kg, cv, use_lmm=use_lmm and not ib, is_bin=ib); r = annotate_gwas(r, sg); r = postprocess_gwas(r, apply_gc=True)
                                 ss.gwas_res = r; ss.lambda_gc = lambda_gc(r["P"].values) if len(r) else np.nan
                             except Exception as e: st.error(f"❌ {e}")
             r = ss.gwas_res
@@ -2225,7 +2255,7 @@ def main():
             cols = [c for c in ss.pheno_df.columns if c not in ("FID", "IID", "Animal")]; pc = st.selectbox("Phénotype GBLUP", cols, key="gb_pc")
             if st.button("▶ GBLUP + validation", key="gb_btn"):
                 try:
-                    gu, _, iu = work_data(); ps = pd.to_numeric(ss.pheno_df[pc], errors="coerce")
+                    gu, _, iu = work_data("full"); ps = pd.to_numeric(ss.pheno_df[pc], errors="coerce")
                     with st.spinner("ML + validation croisée..."): df, st_ = run_gblup(gu, ps.values, ids=iu["IID"].values)
                     ss.gebv_df = df; ss.gblup_stats = st_
                 except Exception as e: st.error(f"❌ {e}")
@@ -2348,7 +2378,7 @@ def main():
         if DEMO: st.info("📤 Export désactivé en mode démo — demandez l'analyse complète pour récupérer vos fichiers.")
         elif ss.gt_filt is None: st.info(NEED_QC)
         else:
-            gu, su, iu = work_data()
+            gu, su, iu = work_data("full")
             if st.button("📦 Préparer PLINK", key="pl_btn"):
                 try: ss._plink = build_plink(gu, iu, su, PREFIX)
                 except Exception as e: st.error(f"❌ {e}")
@@ -2367,7 +2397,7 @@ def main():
         st.subheader("🔬 Méta-analyse & Enrichissement")
         st.markdown("## 1️⃣ Permutation GWAS")
         if ss.gt_filt is not None:
-            gu_perm, su_perm, iu_perm = work_data(); races_perm, _ = get_pairs(iu_perm["FID"].astype(str).values)
+            gu_perm, su_perm, iu_perm = work_data("full"); races_perm, _ = get_pairs(iu_perm["FID"].astype(str).values)
             c1, c2 = st.columns(2); ra_p = c1.selectbox("Race A", races_perm, index=0, key="perm_ra"); rb_p = c2.selectbox("Race B", races_perm, index=1 if len(races_perm) > 1 else 0, key="perm_rb")
             c1, c2 = st.columns(2); n_perm = c1.slider("N permutations", 50, 1000, 100, 50, key="perm_n"); maf_p = c2.slider("MAF", 0.0, 0.3, 0.05, key="perm_maf")
             if ra_p != rb_p and st.button("🧪 Permutation test", type="primary", key="perm_btn"):
@@ -2456,7 +2486,7 @@ def main():
         st.subheader("🧬 Carte des génotypes par chromosome")
         if ss.gt_filt is None: st.info(NEED_QC)
         else:
-            gu, su, iu = work_data(); chroms = sorted(su["CHR"].astype(str).unique(), key=_chk); sel_chr = st.selectbox("Chromosome", chroms, key="hap_chr"); sub_idx = su[su["CHR"].astype(str) == sel_chr].sort_values("BP").index
+            gu, su, iu = work_data("full"); chroms = sorted(su["CHR"].astype(str).unique(), key=_chk); sel_chr = st.selectbox("Chromosome", chroms, key="hap_chr"); sub_idx = su[su["CHR"].astype(str) == sel_chr].sort_values("BP").index
             if len(sub_idx) > 0:
                 sub_idx = sub_idx[:50]; groups = iu["FID"].astype(str).values; order = np.argsort(groups, kind="stable")
                 fig = px.imshow(gu[:, sub_idx][order], labels=dict(x="SNPs (ordre physique)", y="Individus", color="Génotype"), x=su.loc[sub_idx, "SNP"].values, y=groups[order], color_continuous_scale=["#F0F0F0", "#3498db", "#e74c3c"], title=f"Génotypes CHR{sel_chr} (50 premiers SNPs)", aspect="auto")
