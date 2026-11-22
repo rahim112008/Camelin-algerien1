@@ -1662,6 +1662,42 @@ def show_pair(key, name_key, plot_key):
     st.plotly_chart(plot_manhattan(r, "P", nm, thr=-np.log10(0.05 / len(r))), width='stretch', key=plot_key)
     st.dataframe(r.head(20), width='stretch')
 
+def fetch_ncbi_gene_info(gene_list, taxon):
+    results = []
+    for gene in gene_list:
+        clean_gene = str(gene).strip()
+        if not clean_gene or clean_gene.lower() in ("nan", "n/a", "unknown", "intergenic/non-codant", "région régulatrice"):
+            continue
+
+        url = f"https://api.ncbi.nlm.nih.gov/datasets/v2/gene/symbol/{quote(clean_gene)}/taxon/{taxon}"
+        try:
+            r = requests.get(url, timeout=30, headers={"Accept": "application/json"})
+            reports = (r.json().get("reports") or []) if r.status_code == 200 else []
+            gi = (reports[0].get("gene") or {}) if reports else {}
+            
+            if not gi: 
+                results.append({"GENE": clean_gene, "Nom complet": "Non trouvé (NCBI)", "Chromosome": "N/A", "Résumé": "N/A"})
+                continue
+                
+            summ = gi.get("summary")
+            if isinstance(summ, list): 
+                summ = " ".join(x.get("description", "") for x in summ if isinstance(x, dict))
+                
+            results.append({
+                "GENE": clean_gene, 
+                "Nom complet": gi.get("description", "N/A"), 
+                "Chromosome": (gi.get("chromosomes") or ["N/A"])[0], 
+                "Résumé": (str(summ)[:200] + "...") if summ else "N/A"
+            })
+        except Exception as e: 
+            results.append({"GENE": clean_gene, "Nom complet": "Erreur de connexion API", "Chromosome": "N/A", "Résumé": str(e)})
+            
+        time.sleep(0.4)
+        
+    return pd.DataFrame(results)
+
+def main():
+
 def main():
     init_state(); ss = st.session_state
 
