@@ -1745,7 +1745,7 @@ def main():
             else: st.info("💡 [GFF3 Ensembl](https://ftp.ensembl.org/pub/current_gff3/)")
             if ss.gt_filt is not None: auto_ld_section(ss.gt_filt, ss.snp_filt, key_prefix="sel")
 
-        with tabs[6]:
+    with tabs[6]:
         if ss.gt_filt is None: st.info(NEED_QC)
         else:
             st.markdown("### 1️⃣ Mapping ID (optionnel)"); mf = st.file_uploader("CSV mapping (Animal + IID)", type=["csv", "txt"], key="gwas_map")
