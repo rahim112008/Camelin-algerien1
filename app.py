@@ -1381,6 +1381,16 @@ def reset_derived(keep=("gt", "ind_df", "snp_df")):
     for k in _KEYS:
         if k not in keep: st.session_state[k] = None
 
+_KEYS = ["gt", "ind_df", "snp_df", "gt_filt", "ind_filt", "snp_filt", "gt_pre", "ind_pre", "snp_pre", "gt_pruned", "snp_pruned", "qc_stats", "pca_s", "pca_v", "mds_c", "king_K", "fst", "fst_M", "fst_pops", "admix_Q", "admix_K", "cv_res", "ld_df", "roh_df", "froh", "ne_dict", "reyn_D", "reyn_pops", "pheno_df", "gwas_res", "gwas_pheno", "lambda_gc", "gebv_df", "gblup_stats", "ann_df", "_plink", "_vcf", "mapping_df", "fst_snp_df", "win_fst", "taj_df", "taj_race", "css_df", "pair_res", "pair_res_race", "pair_res_group", "pair_name_race", "pair_name_group", "nj_result", "nj_mid", "sel_gff", "sel_ann", "sel_ann_race", "sel_ann_group", "scan_df", "vep_res", "ncbi_gene_res", "lift_res", "div_df", "perm_res", "meta_res", "enr_res", "string_res", "pdb_gene", "pdb_data", "rf_res", "pub_div", "fst_perm", "fstats", "amova_res", "amova_crit", "mantel_res"]
+
+def reset_derived(keep=("gt", "ind_df", "snp_df")):
+    for k in _KEYS:
+        if k not in keep: st.session_state[k] = None
+
+def init_state():
+    for k in _KEYS:
+        if k not in st.session_state: st.session_state[k] = None
+
 def init_state():
     for k in _KEYS:
         if k not in st.session_state: st.session_state[k] = None
