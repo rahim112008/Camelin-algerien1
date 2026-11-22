@@ -1006,21 +1006,26 @@ def run_vep_api(items, species, batch=200):
         ch = ids[i:i + batch]; _post(f"https://rest.ensembl.org/vep/{species}/id?regulatory=1", {"ids": [v for _, v in ch]}, {v: s for s, v in ch}); time.sleep(0.4)
     return pd.DataFrame(results)
 
-def fetch_ncbi_gene_info(gene_list, taxon):
-    results = []
-    for gene in gene_list:
-        url = f"https://api.ncbi.nlm.nih.gov/datasets/v2/gene/symbol/{quote(str(gene))}/taxon/{taxon}"
-        try:
-            r = requests.get(url, timeout=30, headers={"Accept": "application/json"})
-            reports = (r.json().get("reports") or []) if r.status_code == 200 else []
-            gi = (reports[0].get("gene") or {}) if reports else {}
-            if not gi: results.append({"GENE": gene, "Nom complet": "Non trouvé", "Chromosome": "N/A", "Résumé": "N/A"}); continue
-            summ = gi.get("summary")
-            if isinstance(summ, list): summ = " ".join(x.get("description", "") for x in summ if isinstance(x, dict))
-            results.append({"GENE": gene, "Nom complet": gi.get("description", "N/A"), "Chromosome": (gi.get("chromosomes") or ["N/A"])[0], "Résumé": (str(summ)[:200] + "...") if summ else "N/A"})
-        except Exception as e: results.append({"GENE": gene, "Nom complet": "Erreur API", "Chromosome": "N/A", "Résumé": str(e)})
-        time.sleep(0.4)
-    return pd.DataFrame(results)
+def fetch_uniprot_id(gene_name, taxon):
+    # 1. Essai sur le dromadaire (taxon fourni)
+    q = f"gene:{gene_name} AND organism_id:{taxon}"
+    url = f"https://rest.uniprot.org/uniprotkb/search?query={quote(q)}&format=json&size=1"
+    try:
+        r = requests.get(url, timeout=30)
+        if r.status_code == 200 and r.json().get("results"):
+            return r.json()["results"][0].get("primaryAccession"), "Dromadaire"
+    except Exception: pass
+    
+    # 2. Si non trouvé, essai sur l'Humain (Orthologue - taxon 9606)
+    q_h = f"gene:{gene_name} AND organism_id:9606"
+    url_h = f"https://rest.uniprot.org/uniprotkb/search?query={quote(q_h)}&format=json&size=1"
+    try:
+        r = requests.get(url_h, timeout=30)
+        if r.status_code == 200 and r.json().get("results"):
+            return r.json()["results"][0].get("primaryAccession"), "Humain (Orthologue)"
+    except Exception: pass
+    
+    return None, None
 
 def fetch_uniprot_id(gene_name, taxon):
     q = f"gene:{gene_name} AND organism_id:{taxon}"; url = f"https://rest.uniprot.org/uniprotkb/search?query={quote(q)}&format=json&size=1"
@@ -2149,38 +2154,67 @@ def main():
             if v is not None and hasattr(v, "columns") and "GENE" in v.columns and not v.empty:
                 genes_to_structure = [g for g in v["GENE"].unique() if str(g).strip() not in ("N/A", "Intergenic/Non-codant", "Région régulatrice", "Unknown", "nan", "")]
                 if genes_to_structure: break
-        if not genes_to_structure: st.warning("⚠️ Lancez d'abord VEP ou Annotation.")
+        if not genes_to_structure: 
+            st.warning("⚠️ Lancez d'abord VEP ou Annotation.")
         else:
-            c1, c2, c3 = st.columns(3); target_gene = c1.selectbox("Gène", genes_to_structure, key="gene_3d"); view_style = c2.selectbox("Style", ["cartoon", "stick", "sphere", "line"], key="style_3d"); color_scheme = c3.selectbox("Coloration", ["spectrum", "chainHetatm", "ssPyMol"], key="color_3d"); highlight_res = st.text_input("Surligner résidu (ex: 123)", key="hl_res")
+            c1, c2, c3 = st.columns(3)
+            target_gene = c1.selectbox("Gène", genes_to_structure, key="gene_3d")
+            view_style = c2.selectbox("Style", ["cartoon", "stick", "sphere", "line"], key="style_3d")
+            color_scheme = c3.selectbox("Coloration", ["spectrum", "chainHetatm", "ssPyMol"], key="color_3d")
+            highlight_res = st.text_input("Surligner résidu (ex: 123)", key="hl_res")
+            
             if st.button("🔬 Charger 3D", type="primary", key="btn_load_3d"):
                 with st.spinner(f"Recherche pour {target_gene}..."):
-                    uid = fetch_uniprot_id(target_gene, TAXON)
+                    uid, source = fetch_uniprot_id(target_gene, TAXON)
                     if uid:
                         pdb = fetch_alphafold_pdb(uid)
-                        if pdb: ss.pdb_gene = target_gene; ss.pdb_data = pdb; st.success(f"✅ UniProt : {uid}")
-                        else: st.error("❌ AlphaFold introuvable.")
-                    else: st.error("❌ Gène non trouvé dans UniProt.")
-            if ss.pdb_data and ss.pdb_gene == target_gene: st.info("💡 Cliquer-glisser pour tourner, molette pour zoomer."); render_3d_structure(ss.pdb_data, style=view_style, color_scheme=color_scheme, highlight_res=highlight_res)
+                        if pdb: 
+                            ss.pdb_gene = target_gene
+                            ss.pdb_data = pdb
+                            if source == "Humain (Orthologue)":
+                                st.warning(f"⚠️ Gène non trouvé chez le dromadaire. Affichage de la structure de l'orthologue **Humain** (UniProt : {uid}).")
+                            else:
+                                st.success(f"✅ Structure du Dromadaire trouvée (UniProt : {uid})")
+                        else: 
+                            st.error("❌ AlphaFold introuvable pour cet identifiant.")
+                    else: 
+                        st.error("❌ Gène introuvable dans UniProt (ni Dromadaire, ni Humain).")
+            
+            if ss.pdb_data and ss.pdb_gene == target_gene: 
+                st.info("💡 Cliquer-glisser pour tourner, molette pour zoomer.")
+                render_3d_structure(ss.pdb_data, style=view_style, color_scheme=color_scheme, highlight_res=highlight_res)
 
     with tabs[12]:
-        st.subheader("🧬 Illustration allélique autour d'un SNP")
-        if not HAS_BIO: st.error("⚠️ Biopython requis : `pip install biopython`")
+        st.subheader("🧬 Contexte génomique du variant")
+        if not HAS_BIO: 
+            st.error("⚠️ Biopython requis : `pip install biopython`")
         else:
             cand = [("pair_res_group", ss.get("pair_res_group")), ("pair_res_race", ss.get("pair_res_race")), ("gwas_res", ss.get("gwas_res"))]
             snps_to_align = next((d.head(10) for _, d in cand if d is not None and len(d)), None)
             if snps_to_align is not None:
-                st.caption("Séquence de référence Ensembl avec substitution de l'allèle du SNP (illustration, ce n'est PAS un alignement de séquences réelles de groupes).")
+                st.caption("Visualisation de la séquence de référence (Ensembl) centrée sur le SNP. Les allèles variants (A1/A2) issus du génotypage sont substitués pour illustrer la mutation ponctuelle. *Note : Données issues d'une puce SNP.*")
                 snp_to_choose = st.selectbox("SNP à visualiser :", snps_to_align["SNP"].tolist())
+                
                 if st.button("🔍 Générer l'alignement", type="primary", key="aln_btn"):
-                    snp_info = snps_to_align[snps_to_align["SNP"] == snp_to_choose].iloc[0]; chrom = str(snp_info["CHR"]); bp = int(snp_info["BP"]); start = max(1, bp - 25); end = bp + 25
-                    with st.spinner(f"Téléchargement CHR{chrom}:{start}-{end}..."): seq_ref = fetch_ensembl_sequence(chrom, start, end, VEP_SPECIES)
+                    snp_info = snps_to_align[snps_to_align["SNP"] == snp_to_choose].iloc[0]
+                    chrom = str(snp_info["CHR"]); bp = int(snp_info["BP"])
+                    start = max(1, bp - 25); end = bp + 25
+                    
+                    with st.spinner(f"Téléchargement CHR{chrom}:{start}-{end}..."): 
+                        seq_ref = fetch_ensembl_sequence(chrom, start, end, VEP_SPECIES)
+                    
                     if seq_ref and len(seq_ref) > bp - start:
-                        pos = bp - start; ref_b = seq_ref[pos]; row = ss.snp_filt[ss.snp_filt["SNP"].astype(str) == str(snp_to_choose)]
+                        pos = bp - start; ref_b = seq_ref[pos]
+                        row = ss.snp_filt[ss.snp_filt["SNP"].astype(str) == str(snp_to_choose)]
                         al = [a for a in ((str(row.iloc[0].get("A1", ".")), str(row.iloc[0].get("A2", "."))) if not row.empty else ()) if a in ("A", "C", "G", "T") and a != ref_b]
-                        alt_b = al[0] if al else ("A" if ref_b != "A" else "G"); sa = list(seq_ref); sa[pos] = alt_b
+                        alt_b = al[0] if al else ("A" if ref_b != "A" else "G")
+                        sa = list(seq_ref); sa[pos] = alt_b
+                        
                         st.markdown(align_and_highlight(seq_ref, "".join(sa), seq_ref, f"Allèle {alt_b}", f"Allèle {ref_b}"), unsafe_allow_html=True)
-                    else: st.error("❌ Ensembl n'a pas retourné la séquence.")
-            else: st.warning("⚠️ Lancez d'abord un GWAS ou une analyse Groupe/Race.")
+                    else: 
+                        st.error("❌ Ensembl n'a pas retourné la séquence.")
+            else: 
+                st.warning("⚠️ Lancez d'abord un GWAS ou une analyse Groupe/Race.")
 
     with tabs[13]:
         if ss.gt_filt is None: st.info(NEED_QC)
