@@ -1,4 +1,4 @@
-"""🧬 Universal Livestock Genomics Pipeline v23.7 (Bovin & Camelin) — stats pour publication"""
+"""🧬 Universal Livestock Genomics Pipeline v24.0 (Bovin & Camelin) — version unifiée complète"""
 import gzip, io, warnings, zipfile, gc, hashlib, json, time, re
 from collections import Counter
 from io import BytesIO
@@ -10,7 +10,10 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
-import google.generativeai as genai
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
 from plotly.subplots import make_subplots
 from scipy import stats
 from scipy.special import gammaln
@@ -1308,6 +1311,27 @@ def build_plink(gt, ind_df, snp_df, prefix="genome"):
         zf.writestr(f"{prefix}.fam", "\n".join(f"{r['FID']}\t{r['IID']}\t0\t0\t0\t-9" for _, r in ind_df.iterrows()) + "\n")
     return bio.getvalue()
 
+def build_ped_map(gt, ind_df, snp_df, prefix="genome"):
+    """Export PLINK texte standard : .ped (FID IID PAT MAT SEX PHENO + paires d'allèles) et .map (CHR SNP cM BP).
+    Codage : gt = nombre de copies de l'allèle A2 (cohérent avec build_plink / build_vcf). Manquant -> 0 0."""
+    n, m = gt.shape; a_minor, a_major = _alleles_for_export(snp_df, m)
+    clean = lambda a: np.where(np.isin(a, ["", ".", "nan", "None", "-"]), "0", a)
+    a1 = clean(a_major).astype(str); a2 = clean(a_minor).astype(str)
+    g = np.asarray(gt)
+    left = np.where(np.isnan(g), "0", np.where(g == 0, a1[None, :], np.where(g == 1, a1[None, :], a2[None, :])))
+    right = np.where(np.isnan(g), "0", np.where(g == 0, a1[None, :], a2[None, :]))
+    fam = ind_df[["FID", "IID"]].astype(str).values; rows = []
+    for i in range(n):
+        geno = np.empty(2 * m, dtype=object); geno[0::2] = left[i]; geno[1::2] = right[i]
+        rows.append("\t".join([fam[i, 0], fam[i, 1], "0", "0", "0", "-9"]) + "\t" + "\t".join(geno))
+    mp = pd.DataFrame({"c": snp_df["CHR"].astype(str).values[:m], "s": snp_df["SNP"].astype(str).values[:m],
+                       "cm": snp_df["CM"].values[:m] if "CM" in snp_df.columns else 0, "bp": snp_df["BP"].astype(int).values[:m]})
+    bio = BytesIO()
+    with zipfile.ZipFile(bio, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(f"{prefix}.ped", "\n".join(rows) + "\n")
+        zf.writestr(f"{prefix}.map", mp.to_csv(sep="\t", header=False, index=False))
+    return bio.getvalue()
+
 def build_vcf(gt, ind_df, snp_df, proj="Genome"):
     m = gt.shape[1]; alt, ref = _alleles_for_export(snp_df, m); acgt = np.array(["A", "C", "G", "T"])
     ref = np.where(np.isin(ref, acgt), ref, "A"); alt = np.where(np.isin(alt, acgt), alt, "G")
@@ -1563,6 +1587,8 @@ def mantel_test(A, B, n_perm=999, seed=42):
 # ============================================================
 def generer_discussion_ia(prompt_utilisateur, api_key):
     """Envoie un prompt structuré à l'API Gemini et retourne le texte généré."""
+    if genai is None:
+        return "❌ Le module google-generativeai n'est pas installé (pip install google-generativeai)."
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-1.5-flash')
@@ -1571,11 +1597,152 @@ def generer_discussion_ia(prompt_utilisateur, api_key):
     except Exception as e:
         return f"❌ Erreur de l'API IA : {e}"
 
+
+# ============================================================
+# MODULES ISSUS DE LA v23.8 (Shannon-Weaver, Ne enrichi, cartes SNP, LD auto)
+# ============================================================
+def shannon_weaver(gt, labels, min_n=3):
+    labels = np.asarray(labels).astype(str); rows = []
+    for pop in np.unique(labels):
+        sub = gt[labels == pop]
+        if sub.shape[0] < min_n: continue
+        ok = ~np.isnan(sub); n = ok.sum(0).astype(float)
+        with np.errstate(invalid="ignore", divide="ignore"): p = np.where(n > 0, np.nansum(sub, 0) / (2.0 * n), np.nan)
+        q = 1.0 - p
+        with np.errstate(divide="ignore", invalid="ignore"):
+            h_snp = -(np.where(p > 0, p * np.log(p), 0.0) + np.where(q > 0, q * np.log(q), 0.0)); j_snp = np.where(np.isfinite(h_snp), h_snp / np.log(2.0), np.nan)
+        valid = np.isfinite(h_snp)
+        if not valid.any(): continue
+        pv, qv = p[valid], q[valid]
+        with np.errstate(invalid="ignore", divide="ignore"): ne_eff = 1.0 / np.clip(pv**2 + qv**2, 1e-12, 1.0)
+        rows.append({"Population": pop, "N": int(sub.shape[0]), "Shannon_H": round(float(np.nanmean(h_snp[valid])), 4), "Shannon_H_SD": round(float(np.nanstd(h_snp[valid])), 4), "Pielou_J": round(float(np.nanmean(j_snp[valid])), 4), "Nb_Alleles_Efficaces": round(float(np.nanmean(ne_eff)), 4), "Nb_SNPs_Polymorphes": int(valid.sum())})
+    return pd.DataFrame(rows)
+
+
+@cache_data
+def _snp_cm(snp_df_full, snp_id):
+    try:
+        row = snp_df_full[snp_df_full["SNP"].astype(str) == str(snp_id)]
+        if row.empty: return None
+        cm = row["CM"].iloc[0]; return float(cm) if pd.notna(cm) else None
+    except Exception: return None
+
+def _cm_window_to_bp(snp_df_full, chrom, center_cm, window_cm):
+    sub = snp_df_full[snp_df_full["CHR"].astype(str) == str(chrom)].copy()
+    if sub.empty or np.all(sub["CM"].values.astype(float) == 0): return None
+    sub = sub.sort_values("CM").reset_index(drop=True); cm_s = sub["CM"].values.astype(float); bp_s = sub["BP"].values.astype(float)
+    lo = max(cm_s.min(), center_cm - window_cm); hi = min(cm_s.max(), center_cm + window_cm)
+    a, b = float(np.interp(lo, cm_s, bp_s)), float(np.interp(hi, cm_s, bp_s)); return int(min(a, b)), int(max(a, b))
+
+def _bp_to_cm(snp_df_full, chrom, bp):
+    sub = snp_df_full[snp_df_full["CHR"].astype(str) == str(chrom)].copy()
+    if sub.empty or np.all(sub["CM"].values.astype(float) == 0): return None
+    sub = sub.sort_values("BP").reset_index(drop=True); return float(np.interp(bp, sub["BP"].values.astype(float), sub["CM"].values.astype(float)))
+
+
+def plot_shannon_weaver(df):
+    if df is None or df.empty: return None
+    fig = make_subplots(rows=1, cols=2, subplot_titles=("Shannon-Weaver H' (diversité allélique)", "Pielou J' (équitabilité)"))
+    fig.add_trace(go.Bar(x=df["Population"], y=df["Shannon_H"], error_y=dict(type="data", array=df["Shannon_H_SD"]), marker_color="teal", text=df["Shannon_H"], textposition="outside", name="H'"), 1, 1)
+    fig.add_trace(go.Bar(x=df["Population"], y=df["Pielou_J"], marker_color="orange", text=df["Pielou_J"], textposition="outside", name="J'"), 1, 2)
+    fig.add_hline(y=1.0, line_dash="dash", line_color="grey", annotation_text="J' max = 1", row=1, col=2)
+    fig.update_layout(height=550, showlegend=False, title_text="Diversité génétique — Shannon-Weaver & Pielou", title_x=0.5, margin=dict(t=100)); return fig
+
+def plot_ne(ne_df, title="Taille efficace historique (N_e)", log_y=True, show_ci=True):
+    if ne_df is None or ne_df.empty: return None
+    d = ne_df.sort_values("GenAgo").copy(); fig = go.Figure()
+    if show_ci:
+        lo = (d["Ne"] * 0.7).clip(lower=1e-6); hi = d["Ne"] * 1.3
+        fig.add_trace(go.Scatter(x=pd.concat([d["GenAgo"], d["GenAgo"][::-1]]), y=pd.concat([hi, lo[::-1]]), fill="toself", fillcolor="rgba(220,20,60,0.15)", line=dict(color="rgba(255,255,255,0)"), hoverinfo="skip", showlegend=False))
+    fig.add_trace(go.Scatter(x=d["GenAgo"], y=d["Ne"], mode="lines+markers", line=dict(color="crimson", width=2.5), marker=dict(size=7, color="crimson", line=dict(width=1, color="white")), name="N_e estimé", hovertemplate="Générations: %{x:.0f}<br>N_e: %{y:.0f}<extra></extra>"))
+    fig.update_layout(title=title, xaxis_title="Générations dans le passé", yaxis_title="N_e estimé", yaxis_type="log" if log_y else "linear", height=520, hovermode="x unified"); return fig
+
+def plot_snp_map(snp_df, ars, max_snps=2500, highlight_snps=None, density=False, title="Carte des SNPs sur le génome"):
+    if snp_df is None or snp_df.empty: return None
+    df = snp_df.copy(); df["CHR"] = df["CHR"].astype(str).str.replace(r"^chr", "", regex=True, case=False); df["BP"] = pd.to_numeric(df["BP"], errors="coerce"); df = df.dropna(subset=["BP"])
+    chroms = sorted(df["CHR"].unique(), key=_chk_num)
+    if not chroms: return None
+    n_ch = len(chroms); ypos = {c: i for i, c in enumerate(chroms)}
+    df_plot = df.sample(min(len(df), max_snps), random_state=42) if len(df) > max_snps else df
+    max_bp = {}
+    for c in chroms:
+        sub = df[df["CHR"] == c]
+        if c in ars: max_bp[c] = float(ars[c]) * 1e6
+        elif not sub.empty: max_bp[c] = float(sub["BP"].max())
+        else: max_bp[c] = 100e6
+    colors = px.colors.qualitative.Plotly; bar_colors = []
+    if density:
+        counts = df.groupby("CHR").size().reindex(chroms, fill_value=0).astype(float); mn, mx = float(counts.min()), float(counts.max())
+        for c in chroms:
+            t = 0.5 if mx == mn else (counts[c] - mn) / (mx - mn); r = int(255 * t + 255 * (1 - t)); g = int(200 * (1 - t)); b = int(50 * (1 - t)); bar_colors.append(f"rgb({r},{g},{b})")
+    else: bar_colors = ["lightgrey"] * n_ch
+    fig = go.Figure()
+    for i, c in enumerate(chroms): fig.add_trace(go.Scatter(x=[0, max_bp[c] / 1e6], y=[i, i], mode="lines", line=dict(color=bar_colors[i], width=16), hovertemplate=f"Chr{c}<br>Longueur: {max_bp[c]/1e6:.1f} Mb<extra></extra>", showlegend=False))
+    for i, c in enumerate(chroms):
+        sub = df_plot[df_plot["CHR"] == c]
+        if sub.empty: continue
+        fig.add_trace(go.Scatter(x=sub["BP"] / 1e6, y=np.full(len(sub), i, dtype=float), mode="markers", marker=dict(size=4, color=colors[i % len(colors)], opacity=0.75, line=dict(width=0.3, color="white")), text=sub.get("SNP", pd.Series([""] * len(sub))).astype(str), hovertemplate="%{text}<br>Chr" + c + " : %{x:.2f} Mb<extra></extra>", showlegend=False))
+    if highlight_snps is not None and not highlight_snps.empty:
+        hs = highlight_snps.copy(); hs["CHR"] = hs["CHR"].astype(str).str.replace(r"^chr", "", regex=True, case=False)
+        for _, h in hs.iterrows():
+            c = str(h["CHR"])
+            if c not in ypos: continue
+            fig.add_trace(go.Scatter(x=[float(h["BP"]) / 1e6], y=[ypos[c]], mode="markers", marker=dict(size=15, color="red", symbol="star", line=dict(width=1, color="white")), text=[str(h.get("SNP", ""))], hovertemplate="⭐ %{text}<br>Chr" + c + " : %{x:.2f} Mb<extra></extra>", showlegend=False))
+    fig.update_layout(title=title, xaxis_title="Position (Mb)", yaxis=dict(tickmode="array", tickvals=list(range(n_ch)), ticktext=[f"Chr{c}" for c in chroms], autorange="reversed", showgrid=True, gridcolor="rgba(0,0,0,0.05)"), height=max(420, 28 * n_ch + 220), hovermode="closest", plot_bgcolor="white"); return fig
+
+def plot_snp_density_heatmap(snp_df, ars, window_kb=1000):
+    if snp_df is None or snp_df.empty: return None
+    df = snp_df.copy(); df["CHR"] = df["CHR"].astype(str).str.replace(r"^chr", "", regex=True, case=False); df["BP"] = pd.to_numeric(df["BP"], errors="coerce"); df = df.dropna(subset=["BP"])
+    chroms = sorted(df["CHR"].unique(), key=_chk_num)
+    if not chroms: return None
+    max_w = 0; mats = []
+    for c in chroms:
+        sub = df[df["CHR"] == c]; L = float(ars.get(c, 100)) * 1e6; nb = max(1, int(np.ceil(L / (window_kb * 1000)))); bins = (sub["BP"] / (window_kb * 1000)).astype(int).clip(0, nb - 1)
+        vec = np.zeros(nb, dtype=float)
+        for b in bins: vec[b] += 1
+        mats.append(vec); max_w = max(max_w, nb)
+    M = np.full((len(chroms), max_w), np.nan)
+    for i, v in enumerate(mats): M[i, :len(v)] = v
+    fig = go.Figure(data=go.Heatmap(z=M, x=np.arange(max_w) * window_kb, y=[f"Chr{c}" for c in chroms], colorscale="Viridis", colorbar=dict(title="Nb SNPs"), hovertemplate="Chr=%{y}<br>Pos≈%{x} kb<br>Nb SNPs=%{z}<extra></extra>"))
+    fig.update_layout(title=f"Densité de SNPs par fenêtre de {window_kb} kb", xaxis_title="Position (kb)", height=max(400, 30 * len(chroms) + 150)); return fig
+
+def auto_ld_section(gt, snp_df, key_prefix="", title=None, max_snp=15000, max_kb=1000, show_stats=True):
+    label = title or "🔗 Déséquilibre de liaison (LD) — automatique"; st.markdown(f"### {label}")
+    if gt is None or gt.size == 0 or gt.shape[1] < 10: st.info("Pas assez de SNPs pour calculer le LD (minimum 10)."); return None
+    try:
+        with st.spinner("Calcul du LD..."): ld = ld_decay(gt, snp_df, max_kb=max_kb, max_snp=max_snp)
+        if ld.empty: st.info("LD non calculable sur ces données."); return None
+        fig = plot_ld(ld)
+        if fig is not None: st.plotly_chart(fig, width='stretch', key=f"ld_{key_prefix}")
+        if show_stats:
+            c1, c2, c3 = st.columns(3); half = ld[ld["r2"] <= 0.2]
+            c1.metric("Demi-distance (r²=0.2)", f"{half['dist_kb'].iloc[0]:.1f} kb" if not half.empty else "—")
+            c2.metric("r² moyen global", f"{ld['r2'].mean():.4f}"); c3.metric("Nb fenêtres LD", int(len(ld)))
+            with st.expander("📊 Tableau LD détaillé"): st.dataframe(ld, width='stretch', height=280)
+        return ld
+    except Exception as e: st.warning(f"⚠️ LD : {type(e).__name__} — {e}"); return None
+
+def show_global_summary(gt, ind_df, snp_df, labels, ars):
+    with st.expander("📋 Résumé global — cliquez pour afficher", expanded=False):
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Individus", f"{gt.shape[0]:,}"); c2.metric("SNPs", f"{gt.shape[1]:,}"); c3.metric("Populations", len(np.unique(labels))); c4.metric("Chromosomes", snp_df["CHR"].nunique())
+        st.markdown("#### 🌿 Diversité (Shannon-Weaver)"); sw = shannon_weaver(gt, labels)
+        if not sw.empty:
+            st.dataframe(sw, width='stretch', height=200); f = plot_shannon_weaver(sw)
+            if f: st.plotly_chart(f, width='stretch', key="sw_global")
+        st.markdown("#### 📈 N_e historique"); ne = ne_historical(gt, snp_df)
+        if not ne.empty:
+            f = plot_ne(ne)
+            if f: st.plotly_chart(f, width='stretch', key="ne_global")
+        st.markdown("#### 🗺️ Carte des SNPs"); f = plot_snp_map(snp_df, ars, density=True)
+        if f: st.plotly_chart(f, width='stretch', key="map_global")
+
+
 # ============================================================
 # INTERFACE STREAMLIT — PARTIE 1/2
 # ============================================================
 _KEYS = ["gt", "ind_df", "snp_df", "gt_filt", "ind_filt", "snp_filt", "gt_pre", "ind_pre", "snp_pre", "gt_pruned", "snp_pruned", "qc_stats", "pca_s", "pca_v", "mds_c", "king_K", "fst", "fst_M", "fst_pops", "admix_Q", "admix_K", "cv_res", "ld_df", "roh_df", "froh", "ne_dict", "reyn_D", "reyn_pops",
-         "pheno_df", "gwas_res", "gwas_pheno", "lambda_gc", "gebv_df", "gblup_stats", "ann_df", "_plink", "_vcf", "mapping_df", "fst_snp_df", "win_fst", "taj_df", "taj_race", "css_df", "pair_res", "pair_res_race", "pair_res_group", "pair_name_race", "pair_name_group",
+         "pheno_df", "gwas_res", "gwas_pheno", "lambda_gc", "gebv_df", "gblup_stats", "ann_df", "_plink", "_vcf", "_pedmap", "mapping_df", "fst_snp_df", "win_fst", "taj_df", "taj_race", "css_df", "pair_res", "pair_res_race", "pair_res_group", "pair_name_race", "pair_name_group",
          "nj_result", "nj_mid", "sel_gff", "sel_ann", "sel_ann_race", "sel_ann_group", "scan_df", "vep_res", "ncbi_gene_res", "lift_res", "div_df", "perm_res", "meta_res", "enr_res", "string_res", "pdb_gene", "pdb_data", "rf_res", "pub_div", "fst_perm", "fstats", "amova_res", "amova_crit", "mantel_res"]
 
 def reset_derived(keep=("gt", "ind_df", "snp_df")):
@@ -1728,7 +1895,7 @@ def main():
 
     if ss.gt is None: st.info(f"👉 Chargez des données pour {species_choice} (Demo recommandé)."); return
 
-    st.title(f"🐾 {species_choice} Genomics Pipeline v23.7")
+    st.title(f"🐾 {species_choice} Genomics Pipeline v24.0")
 
     if DEMO:
         st.info("🧪 Mode démo : données simulées préchargées (QC déjà appliqué). Explorez les onglets — aucune donnée personnelle n'est utilisée.")
@@ -1736,7 +1903,7 @@ def main():
     tabs = st.tabs(["🧹 QC", "✂️ LD", "🧬 Structure", "🎨 Admixture", "📈 Démographie", "🔍 Sélection",
                 "🧪 GWAS Classique", "🎯 Post-GWAS", "📈 GBLUP", "🧬 Annotation", "🧬 VEP & NCBI",
                 "🧬 Structure 3D", "🧬 Alignement", "📤 Export", "🔬 Méta-analyse", "🧠 ML",
-                "🧬 Génotypes/blocs", "🌍 Orthologue humain", "📐 Stats publication", "📝 Rédaction Article", "🕵️‍♂️ Diagnostic d'Artefacts"])
+                "🧬 Génotypes/blocs", "🌍 Orthologue humain", "📐 Stats publication", "📝 Rédaction Article", "🕵️‍♂️ Diagnostic d'Artefacts", "🗺️ Carte SNPs"])
     NEED_QC = "⚠️ Lancez d'abord le QC (onglet 🧹)."
 
     # ---------------- TAB 0 : QC ----------------
@@ -1750,6 +1917,9 @@ def main():
         if ss.qc_stats:
             s = ss.qc_stats; c1, c2, c3, c4 = st.columns(4); c1.metric("Individus", s["n_ind_final"], delta=-s["excluded_ind"]); c2.metric("SNPs", s["n_snp_final"], delta=-s["excluded_snp"]); c3.metric("Individus avant outliers", s["n_ind_pre"]); c4.metric("Outliers (het)", s["trace"].get("het", 0)); st.caption(f"Détail des exclusions : {s['trace']}")
         st.plotly_chart(plot_missing(miss_ind(ss.gt), miss_snp(ss.gt)), width='stretch', key="plot_missing_qc"); st.caption("Histogrammes calculés sur les données brutes (avant QC).")
+        if ss.gt_filt is not None:
+            show_global_summary(ss.gt_filt, ss.ind_filt, ss.snp_filt, ss.ind_filt["FID"].astype(str).values, ARS)
+            auto_ld_section(ss.gt_filt, ss.snp_filt, key_prefix="qc")
 
     # ---------------- TAB 1 : LD ----------------
     with tabs[1]:
@@ -1764,7 +1934,7 @@ def main():
             if ss.ld_df is not None:
                 f = plot_ld(ss.ld_df)
                 if f: st.plotly_chart(f, width='stretch', key="plot_ld_decay")
-                else: st.warning("Pas assez de paires de SNPs proches.")
+                else: st.warning("⚠️ Impossible de calculer la décroissance du LD (pas assez de SNPs proches ou distance trop grande).")
 
     # ---------------- TAB 2 : Structure ----------------
     with tabs[2]:
@@ -1790,6 +1960,14 @@ def main():
             if ss.div_df is not None and not ss.div_df.empty:
                 d = ss.div_df; st.dataframe(d, width='stretch'); st.download_button("⬇ CSV", d.to_csv(index=False).encode("utf-8"), "tableau_diversite.csv", "text/csv"); st.plotly_chart(px.bar(d, x="Population", y=["H_Observee (Ho)", "H_Attendue (He)"], barmode="group", title="Ho vs He par Population", labels={"value": "Hétérozygotie", "variable": "Type"}), width='stretch', key="plot_div"); st.info(f"**Moyennes :** He = {d['H_Attendue (He)'].mean():.4f} | Ho = {d['H_Observee (Ho)'].mean():.4f} | PIC = {d['PIC'].mean():.4f} | Fis = {d['Fis (Consanguinité)'].mean():.4f}")
             elif ss.div_df is not None: st.warning("Aucune population avec ≥ 3 individus.")
+            st.divider(); st.subheader("🌿 Diversité — Shannon-Weaver & Pielou")
+            sw = shannon_weaver(gu, iu["FID"].astype(str).values)
+            if not sw.empty:
+                st.dataframe(sw, width='stretch'); st.download_button("⬇ CSV Shannon-Weaver", sw.to_csv(index=False).encode("utf-8"), "shannon_weaver.csv", "text/csv", key="dl_sw")
+                f_sw = plot_shannon_weaver(sw)
+                if f_sw: st.plotly_chart(f_sw, width='stretch', key="plot_sw_tab")
+            else: st.info("Pas assez de populations valides (≥ 3 individus).")
+        if ss.gt_filt is not None: auto_ld_section(ss.gt_filt, ss.snp_filt, key_prefix="struct")
 
     # ---------------- TAB 3 : Admixture ----------------
     with tabs[3]:
@@ -1826,7 +2004,11 @@ def main():
                     ss.ne_dict = ne; st.success(f"✅ {len(roh)} ROH")
                 except Exception as e: st.error(f"❌ {e}")
             if ss.froh is not None and len(ss.froh) == len(ss.ind_filt):
-                df = pd.DataFrame({"FROH": ss.froh, "Pop": ss.ind_filt["FID"].values}); st.plotly_chart(px.histogram(df, x="FROH", color="Pop", nbins=50, title="FROH"), width='stretch', key="plot_roh_hist"); st.dataframe(df.groupby("Pop")["FROH"].agg(["count", "mean", "std", "max"]).round(4), width='stretch')
+                df = pd.DataFrame({"FROH": ss.froh, "Pop": ss.ind_filt["FID"].values})
+                if df["FROH"].sum() == 0:
+                    st.warning("⚠️ Aucun ROH trouvé. Vérifiez la densité de vos SNPs (plusieurs SNPs consécutifs sans hétérozygotes sont nécessaires).")
+                    snp_counts = ss.snp_filt["CHR"].value_counts(); st.info(f"📊 Densité de SNPs par chromosome : min {snp_counts.min()} · max {snp_counts.max()}")
+                st.plotly_chart(px.histogram(df, x="FROH", color="Pop", nbins=50, title="FROH"), width='stretch', key="plot_roh_hist"); st.dataframe(df.groupby("Pop")["FROH"].agg(["count", "mean", "std", "max"]).round(4), width='stretch')
                 if ss.roh_df is not None and not ss.roh_df.empty:
                     st.markdown("### 📏 ROH par classes de taille"); roh = ss.roh_df; n_ind = len(ss.ind_filt); L_kb = sum(ARS[c] for c in AUTO) * 1000; col1, col2, col3 = st.columns(3)
                     for col, thr, lab in ((col1, 1500, "FROH > 1.5 Mb (Ancien)"), (col2, 5000, "FROH > 5 Mb (Récent)"), (col3, 10000, "FROH > 10 Mb (Très récent)")): col.metric(lab, f"{roh[roh['length_kb'] > thr]['length_kb'].sum() / (L_kb * n_ind):.4f}")
@@ -1834,6 +2016,9 @@ def main():
                 fig = go.Figure()
                 for k, d in ss.ne_dict.items(): fig.add_trace(go.Scatter(x=d["GenAgo"], y=d["Ne"], mode="lines+markers", name=k))
                 fig.update_layout(title="Ne historique (LD, Sved 1971)", xaxis_title="Générations passées", yaxis_title="Ne", xaxis_type="log", yaxis_type="log", height=450); st.plotly_chart(fig, width='stretch', key="plot_ne")
+                pop_ne = st.selectbox("Population (Ne enrichi avec intervalle)", list(ss.ne_dict.keys()), key="ne_pop_sel")
+                f_ne2 = plot_ne(ss.ne_dict[pop_ne], title=f"N_e enrichi — {pop_ne}", show_ci=True)
+                if f_ne2: st.plotly_chart(f_ne2, width='stretch', key="plot_ne_enhanced")
 
     # ---------------- TAB 5 : Sélection ----------------
     with tabs[5]:
@@ -2168,6 +2353,10 @@ def main():
                 try: ss._plink = build_plink(gu, iu, su, PREFIX)
                 except Exception as e: st.error(f"❌ {e}")
             if ss._plink: st.download_button("⬇ PLINK (.bed/.bim/.fam)", ss._plink, f"{PREFIX}.zip", "application/zip")
+            if st.button("🧾 Préparer PED/MAP (texte)", key="pedmap_btn"):
+                try: ss["_pedmap"] = build_ped_map(gu, iu, su, PREFIX)
+                except Exception as e: st.error(f"❌ {e}")
+            if ss.get("_pedmap"): st.download_button("⬇ PED + MAP (.zip)", ss["_pedmap"], f"{PREFIX}_pedmap.zip", "application/zip")
             if st.button("📄 Préparer VCF", key="vcf_btn"):
                 try: ss._vcf = build_vcf(gu, iu, su, PREFIX).encode()
                 except Exception as e: st.error(f"❌ {e}")
@@ -2453,5 +2642,19 @@ def main():
 # ============================================================
 # POINT D'ENTRÉE
 # ============================================================
+    # ---------------- TAB 21 : Carte SNPs ----------------
+    with tabs[21]:
+        st.subheader("🗺️ Carte des SNPs sur le génome (karyoplot)")
+        if ss.gt_filt is None: st.info(NEED_QC)
+        else:
+            use_density = st.checkbox("Colorer par densité", value=False, key="snp_map_density")
+            fig_map = plot_snp_map(ss.snp_filt, ARS, density=use_density)
+            if fig_map is not None: st.plotly_chart(fig_map, width='stretch', key="plot_snp_map_tab")
+            st.divider(); st.subheader("🔥 Heatmap densité de SNPs")
+            wk_d = st.selectbox("Fenêtre densité (kb)", [100, 500, 1000, 5000], index=2, key="dens_w")
+            fig_heat = plot_snp_density_heatmap(ss.snp_filt, ARS, window_kb=wk_d)
+            if fig_heat is not None: st.plotly_chart(fig_heat, width='stretch', key="plot_density_heat_tab")
+
+
 if __name__ == "__main__":
     main()
